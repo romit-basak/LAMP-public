@@ -1,0 +1,46 @@
+# Progress Log
+
+> Running record of major work on the viewshed half of LAMP. Newest entries at the top.
+> Keep entries brief: what was done, key findings/decisions, open questions raised.
+
+## 2026-06-13 — Baseline (r.viewshed) vs 3D comparison (mid-term-gating deliverable)
+
+- User moved their QGIS work into `Task_2/` (GRASS r.viewshed baseline on a tiny 54×68 @1.5 m ROI around the 3 observers, + the original-task DEM subsets + the real `Site_Plan.pdf` = aperture source for step 2).
+- New `scripts/compare_baseline.py`: re-runs the 3D engine on Task_2's own `DEM_Subset-WithBuildings.tif` (same grid/surface/datum as the baseline → isolates *algorithm + height*), binarizes the r.viewshed output (finite cell = visible), computes per-observer agreement, writes side-by-side + agreement figures, a `building_effect.png`, `comparison_metrics.csv`, and `comparison_report.md`. Outputs in `Task_2/comparison/`.
+- **Result = engine validated**: 3D vs r.viewshed agree **97.2–98.7%** (IoU 0.86–0.92). This is the *expected* outcome — both treat buildings as solid right now, so close agreement confirms the engine reproduces the established tool. The headline 3D-beats-2D divergence is step 2 (apertures), not now.
+- Clue: agreement/visible-counts match the baseline best at **1.75 m** eye height (baseline param was unrecorded) → baseline likely used GRASS's 1.75 m default. Mentor question.
+- Two substantive findings for the report: (1) at 1.5 m the buildings block ~0 *new ground* and only add rooftops — the coarse baseline barely registers building occlusion; (2) resolution matters as much as algorithm — the 0.4 m production run resolves buildings as real blocks (0.5–1.8% visible) where 1.5 m cannot.
+- Refactor: comparison reuses `viewshed.py` (`HeightfieldScene`, `compute_viewshed`, etc.); dependency-free markdown tables (no `tabulate`); tiny-raster writer (untiled).
+
+## 2026-06-13 — True-3D ray-casting viewshed engine (build-order step 1)
+
+- New `scripts/viewshed.py`: device-agnostic (cuda→mps→cpu) true-3D LOS engine behind a `Scene` interface. `HeightfieldScene` ray-marches each eye→target bearing against the DEM-with-buildings, running-max elevation-angle reduction (step-by-step `torch.maximum`, NOT cummax — unsupported on MPS), manual bilinear gather (grid_sample border-padding also unsupported on MPS), eye-relative coords for float32 precision. `Scene` seam lets an aperture-capable geometry scene drop in at step 2 unchanged.
+- Outputs (in `220_BuildingsToDEM/`): per-observer `viewshed_obs{1,2,3}.tif` (uint8, windowed, georeferenced) + `_combined_max`/`_count`, QC PNGs, and the visibility graph (`viewgraph_edges.geojson`/`.csv`, `viewgraph_obs_obs.csv`).
+- Result (3 Marks_Brief2 observers, eye 1.5 m, core+60 m window = 1.26M cells): visible fractions 0.5–1.8%; **all 3 observers mutually invisible**; ~8–9 building centroids visible each (~60 by any-vertex). Low numbers are physically correct — a ground-level observer in the dense necropolis is heavily occluded by adjacent tombs (the thesis in miniature). Visual audit (QC PNGs) confirms clean radial splat + shadows behind footprints, no rays through solid blocks.
+- All 5 baked-in self-checks PASS (self-neighborhood, obs-obs symmetry, height-monotonicity, forward/reverse LOS). `sanity_checks.py` still all-PASS (viewshed_*.tif don't collide with the DEM glob).
+- Refactor: extracted `core_window()` into `build_dem_with_buildings.py`, shared with the engine.
+- Perf note: ~9 min for 3 observers on MPS (per-step kernel dispatch dominates, 80% CPU). Fine for the demo; full-site needs CUDA or step/chunk tuning.
+- Limitation (by design): solid flat-top buildings, no apertures yet — that's step 2, and the `Scene` seam is where it plugs in.
+
+## 2026-06-12 — Regenerated building-extruded DEM at 0.4 m
+
+- New `scripts/build_dem_with_buildings.py`: rasterizes `Buildings_Mask` `Elevation` heights onto the Current_DEM grid and adds them (recipe from `220_BuildingsToDEM/README.md`), with input validation, per-feature coverage audit, self-verification on the written file, and QC images.
+- Output: `220_BuildingsToDEM/DEMWithBuildings-0.4m-20260612.tif` — **canonical ray-casting surface**. Self-checks: off-footprint diff exactly 0; on-footprint = base + height (float32 eps); all 263 footprints burned.
+- Visual audit of hillshade + diff PNGs passed (discrete blocks, coherent shadows, heights 0.7–8 m).
+- `sanity_checks.py` extended: auto-detects newest `DEMWithBuildings-0.4m-*.tif`, hard-PASS grid identity vs base04.
+- Data note: footprint `Type` is numeric codes 0–10, meaning unknown → mentor question #3.
+
+## 2026-06-10/11 — Local environment + data verification
+
+- Device-agnostic `requirements.txt` at project root (CUDA pins stripped or behind `sys_platform == "win32"` markers); raw remote freeze preserved in datastore. Convention codified in CLAUDE.md: cuda → mps → cpu, CuPy-or-NumPy `xp` pattern.
+- `.venv` built with **uv**, Python 3.13 (matches remote); all 70 packages installed; MPS verified.
+- `Marks_Brief2.*` (3-point proposal sample) filed into `100_Data/160_ViewpointMarks/` (local-only folder; full set TBD with mentors). Points are MultiPoint/EPSG:4326 — explode + reproject on load.
+- New `scripts/sanity_checks.py`: all assets EPSG:32636; 263 footprints with `Elevation` 0.7–8 m; 263 gpkgs valid; viewpoints inside DEM.
+- **Key finding**: legacy `BuildingsToDEM.tif` unusable for heights — 1.5 m res and ~78 m vertical-reference offset vs Current_DEM. Decision: regenerate locally (done 06-12).
+
+## 2026-06-10/11 — Data transfer from UA remote machine
+
+- Identified viewshed-relevant subset (~2.1 GB of the ~200 GB datastore) from `tree.txt`; SAR imagery (`140_SAR_Imagery/`) stays remote.
+- PowerShell staging + zip on the remote; transferred via OneDrive after RealVNC file transfer stalled; SHA256-verified.
+- Windows `Compress-Archive` backslash paths extracted flat on macOS — restructured 305 files into `LAMP_DataStore/ElBagawat/` mirroring the remote layout.
+- Discovered the CLAUDE.md asset names were conceptual; real paths recorded in CLAUDE.md (gpkg IDs are 1–263, not 1–99; no literal `Site_Plan.pdf` — plan is `bagawat print.pdf` + `BaseSiteCAD/`).
