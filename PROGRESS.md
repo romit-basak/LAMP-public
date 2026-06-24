@@ -3,6 +3,18 @@
 > Running record of major work on the viewshed half of LAMP. Newest entries at the top.
 > Keep entries brief: what was done, key findings/decisions, open questions raised.
 
+## 2026-06-13 — id-based observer selection (engine CLI extension)
+
+- `scripts/viewshed.py` now reads the observer file's `id` field: `load_observers` returns `(id, x, y)` (id field if present, else 1-based row index). New `--ids N [N …]` selects specific observers by id from `--observers` (fails cleanly listing any missing id); omitting `--ids` runs the whole table. Built for the mentors' forthcoming exhaustive, id-referenced point set — so observers are chosen by id, not coordinates.
+- Ids flow through everything: output filenames (`viewshed_id80.tif/.png`), QC titles, visibility-graph `src_id`/`dst_id`, and the obs-obs matrix labels. Inline `--point` still works (synthetic `obs1..` labels; `--ids` then ignored with a warn).
+- Used it to run the user's analysis on `my_observers.gpkg` (ids 80/180/181) → `viewshed_runs/`: 360° from all three; id80 NE cone (az 45°, fov 120°); id180 (az 10°, fov 45°); id181 due N (az 0°, fov 45°). Radius 200 m, `--no-graph`.
+- Fixed self-check #1: a building-adjacent observer legitimately has some immediate neighbours occluded by its own wall (id181 sits 0.6 m from building 181), which false-FAILED the old "all 4 neighbours visible" assertion. Now requires ≥1 of 8 neighbours visible (catches total blindness / sign bugs; tolerates walls) — important since the mentors' full point set will be building-adjacent.
+
+## 2026-06-13 — Directional / point-based viewshed (engine CLI extension)
+
+- `scripts/viewshed.py` gained: arbitrary observer count (relaxed the hardcoded 3), inline `--point X Y` (repeatable, overrides `--observers`), per-observer `--radius` (window follows the point), and a `--azimuth`/`--fov` view cone (compass degrees, 0=N/90=E/CW; `--fov` = full width; default 360 = omni). `--no-graph` for single/point runs. Sector + radius applied as a post-mask on the LOS result; QC PNGs draw the view wedge.
+- Notes: 360° was already the default behavior. In radius mode each observer has its own window so no combined/count layer. The visibility graph stays omnidirectional (sector applies to rasters only). Small-window tiling fixed in `write_viewshed_tif` (untiled <256 px). Smoke-tested: single-point 60° east cone @200 m (wedge audited) and multi-point radius runs.
+
 ## 2026-06-13 — Baseline (r.viewshed) vs 3D comparison (mid-term-gating deliverable)
 
 - User moved their QGIS work into `Task_2/` (GRASS r.viewshed baseline on a tiny 54×68 @1.5 m ROI around the 3 observers, + the original-task DEM subsets + the real `Site_Plan.pdf` = aperture source for step 2).
