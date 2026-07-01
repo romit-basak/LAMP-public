@@ -124,6 +124,9 @@ def main():
     print("=" * 70)
     with rasterio.open(DEM_BUILDINGS) as bsrc, rasterio.open(DEM_BASE_04) as dsrc:
         bld = bsrc.read(1, masked=True).filled(np.nan).astype("float64")
+        # The two DEMs sit on different grids, so resample the base onto the
+        # buildings grid before differencing — otherwise misaligned cells
+        # would be subtracted from each other.
         base = np.full(bld.shape, np.nan)
         reproject(
             source=rasterio.band(dsrc, 1), destination=base,

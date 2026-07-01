@@ -36,6 +36,7 @@ def hillshade(z, res, azimuth=315.0, altitude=45.0):
     gy, gx = np.gradient(z, res)
     slope = np.pi / 2 - np.arctan(np.hypot(gx, gy))
     aspect = np.arctan2(-gx, gy)
+    # Compass azimuth (CW from north) -> math angle (CCW from east) for trig.
     az = np.deg2rad(360.0 - azimuth + 90.0)
     alt = np.deg2rad(altitude)
     shaded = (np.sin(alt) * np.sin(slope) +
@@ -131,6 +132,8 @@ def main():
              f"{n_nodata_under} px")
 
     out = base.copy()
+    # Extrude only on real terrain; adding height over nodata would invent
+    # ground the ray-caster could then "see".
     out[fp_mask & valid] += heights[fp_mask & valid]
     print(f"  footprint pixels: {int(fp_mask.sum()):,} "
           f"({100 * fp_mask.mean():.2f}% of grid)")

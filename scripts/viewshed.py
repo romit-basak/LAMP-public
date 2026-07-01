@@ -11,9 +11,13 @@ Outputs per-observer visibility rasters (+ combined/count), a visibility graph
 
 Run (360° from the 3 sample observers, core window):
     .venv/bin/python scripts/viewshed.py
-Directional cone from an arbitrary point (compass azimuth, full-width fov):
+Directional cone from an arbitrary point (compass azimuth + pitch, full-width
+horizontal fov and vertical vfov):
     .venv/bin/python scripts/viewshed.py --point 254210 2820958 \\
-        --radius 200 --azimuth 90 --fov 60 --no-graph
+        --radius 200 --azimuth 90 --fov 60 --pitch 10 --vfov 40 --no-graph
+Optional 3D visibility volume (coarse voxels; csv/ply/npy/las/laz):
+    .venv/bin/python scripts/viewshed.py --point 254210 2820958 \\
+        --radius 150 --volume --volume-format laz --no-graph
 Any point file, 360°:
     .venv/bin/python scripts/viewshed.py --observers my_points.shp
 
@@ -22,9 +26,12 @@ Exits nonzero if any self-check fails.
 
 import os
 
+# Set before torch is imported: lets ops that lack an MPS kernel fall back to
+# CPU instead of raising, so the same code path runs on Apple Silicon and CUDA.
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import argparse
+import json
 import math
 import sys
 from pathlib import Path
@@ -39,17 +46,25 @@ import pandas as pd
 import rasterio
 import torch
 from rasterio.windows import Window, transform as window_transform
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString
 
 from sanity_checks import ROOT, DEM_REGEN, FOOTPRINTS, VIEWPOINTS, check, warn, failures
 from build_dem_with_buildings import hillshade, core_window
 
-EYE_HEIGHT = 1.5          # meters above surface (CLAUDE.md mandate; do not change)
-STEP = 0.2                # ray-march sample spacing (~1/2 pixel at 0.4 m)
-EPS_ANG = 1e-6            # dimensionless slope tolerance
+EYE_HEIGHT = 1.5          # default eye height (m) above surface; late-antique
+                          # skeletal baseline, override with --eye-height
+STEP = 0.2                # ray-march sample spacing (~1/2 pixel at 0.4 m).
+                          # Sub-pixel on purpose: a coarser step lets a thin
+                          # wall fall between samples, so a ray would leak
+                          # through a solid building at grazing angles.
+EPS_ANG = 1e-6            # slope tolerance so a target sitting exactly on the
+                          # accumulated horizon reads visible instead of losing
+                          # to float rounding in the angle comparison.
 
 
 def select_device():
+    # Prefer a GPU but never hard-code one: CUDA on the remote box, MPS on the
+    # Mac, CPU elsewhere — the check order encodes that preference.
     if torch.cuda.is_available():
         return torch.device("cuda")
     if torch.backends.mps.is_available():
@@ -66,6 +81,8 @@ class HeightfieldScene:
                  eps_ang=EPS_ANG, d_min=None):
         self.dem_np = np.asarray(dem_array, dtype=np.float32)
         self.H, self.W = self.dem_np.shape
+        # Flat and resident on the device so the ray-march can gather the four
+        # bilinear neighbours by flat index without re-uploading the DEM.
         self.dem_flat = torch.as_tensor(
             self.dem_np.reshape(-1), dtype=torch.float32, device=device)
         self.device = device
@@ -77,10 +94,15 @@ class HeightfieldScene:
         self.nodata = nodata
         self.step = step
         self.eps_ang = eps_ang
+        # ~half a pixel diagonal (sqrt(2)/2). A target nearer than this shares
+        # the observer's own cell, so nothing lies between to occlude it; the
+        # march also skips distances below it to avoid dividing by ~0.
         self.d_min = d_min if d_min is not None else 0.71 * self.px
 
     def _pix(self, x, y):
         """World -> fractional cell-center pixel coords (col_f, row_f)."""
+        # -0.5: the affine transform addresses pixel corners, but elevations are
+        # sampled at cell centers, so shift by half a pixel.
         return (x - self.x0) / self.a - 0.5, (y - self.y0) / self.e - 0.5
 
     def surface_z(self, x, y):
@@ -94,6 +116,9 @@ class HeightfieldScene:
         wc = col_f - c0
         wr = row_f - r0
         inb = (c0 >= 0) & (c0 < self.W - 1) & (r0 >= 0) & (r0 < self.H - 1)
+        # Clamp so the neighbour gather never indexes out of bounds; `inb`
+        # remembers which points were truly inside, so the clamped edge reads
+        # get discarded as invalid below (clamp-then-mask).
         c0c, r0c = np.clip(c0, 0, self.W - 2), np.clip(r0, 0, self.H - 2)
         z00 = self.dem_np[r0c, c0c]
         z01 = self.dem_np[r0c, c0c + 1]
@@ -116,10 +141,16 @@ class HeightfieldScene:
         n = len(targets)
         out = np.zeros(n, dtype=bool)
 
+        # March in coordinates relative to the observer's pixel. UTM eastings/
+        # northings are ~1e6 and float32 (all MPS offers) holds ~7 digits, so
+        # adding a 0.2 m step to an absolute coord rounds away. Keep the big
+        # integer anchor (ci, ri) on host; only small offsets become tensors.
         col_eye, row_eye = self._pix(ex, ey)
         ci, ri = int(round(col_eye)), int(round(row_eye))
         cf, rf = col_eye - ci, row_eye - ri
 
+        # Chunk the targets so a full-site grid (millions of cells) never has to
+        # live in device memory all at once.
         for s in range(0, n, chunk):
             tx = targets[s:s + chunk, 0]
             ty = targets[s:s + chunk, 1]
@@ -158,6 +189,9 @@ class HeightfieldScene:
                 inb = (c0 >= 0) & (c0 < self.W - 1) & (r0 >= 0) & (r0 < self.H - 1)
                 c0c = c0.clamp(0, self.W - 2)
                 r0c = r0.clamp(0, self.H - 2)
+                # Hand-rolled bilinear gather via flat indices into dem_flat.
+                # grid_sample is the natural tool, but its border-padding mode
+                # has no MPS kernel, so the four corner reads are explicit.
                 base = r0c * self.W + c0c
                 z00 = self.dem_flat[base]
                 z01 = self.dem_flat[base + 1]
@@ -173,8 +207,13 @@ class HeightfieldScene:
                 z = top * (1 - wr) + bot * wr
                 ang = (z - ez) / d_k
                 ang = torch.where(valid, ang, torch.full_like(ang, -math.inf))
+                # Fold the highest terrain elevation-angle seen so far — the
+                # running horizon. Done step-by-step because torch.cummax, the
+                # obvious one-liner, has no MPS kernel.
                 running = torch.maximum(running, ang)
 
+            # Visible iff the target rises to or above the horizon accumulated
+            # along its bearing.
             vis = (ang_t_t >= running - self.eps_ang).cpu().numpy()
             vis |= near                      # target == observer cell
             vis &= np.isfinite(ang_t)        # tz nodata -> not visible
@@ -236,17 +275,30 @@ def observer_window(scene, eye_xy, radius):
     return Window(max(int(c - rpix), 0), max(int(r - rpix), 0), 2 * rpix, 2 * rpix)
 
 
-def apply_view_constraints(mask, X, Y, eye_xy, azimuth, fov, radius):
-    """Zero out visible cells outside the sight radius and/or the azimuth
-    sector. Azimuth is compass degrees (0=N, 90=E, clockwise); fov is the
-    full cone width. Modifies `mask` in place and returns it."""
-    ex, ey = eye_xy
+def apply_view_constraints(mask, X, Y, Z, eye_xyz, azimuth, fov, radius,
+                           pitch=0.0, vfov=180.0):
+    """Zero out visible cells outside the sight radius, the horizontal azimuth
+    sector, and/or the vertical pitch sector. Azimuth is compass degrees
+    (0=N, 90=E, clockwise); fov is the full horizontal cone width. Pitch is the
+    elevation angle in degrees (0=horizontal, + up); vfov is the full vertical
+    cone width (180 = unconstrained). Modifies `mask` in place and returns it."""
+    ex, ey, ez = eye_xyz
     if radius is not None:
         mask[(mask == 1) & (np.hypot(X - ex, Y - ey) > radius)] = 0
     if azimuth is not None and fov < 360:
+        # arctan2(dx, dy) with x first yields a compass bearing (0=N, CW). The
+        # +180 %360 -180 folds the difference into [-180, 180] so the sector
+        # test holds across the 0/360 seam (e.g. a cone centered on north).
         bearing = np.degrees(np.arctan2(X - ex, Y - ey)) % 360
         diff = (bearing - azimuth + 180) % 360 - 180
         mask[(mask == 1) & (np.abs(diff) > fov / 2)] = 0
+    if vfov < 180:
+        dist = np.hypot(X - ex, Y - ey)
+        with np.errstate(invalid="ignore"):
+            elev = np.degrees(np.arctan2(Z - ez, dist))
+        # the observer's own cell (dist 0) has no defined elevation; keep it
+        sector = (np.abs(elev - pitch) <= vfov / 2) | (dist == 0)
+        mask[(mask == 1) & ~sector] = 0
     return mask
 
 
@@ -269,6 +321,10 @@ def build_viewgraph(scene, eyes, footprints, labels):
         cen_t = np.column_stack([cent.x.values, cent.y.values, roof_z])
         vis_cent = scene.visible_mask(eye, cen_t)
         vis_any = vis_cent.copy()
+        # Two visibility criteria per building: the strict centroid test and
+        # the lenient any-vertex test — a tomb whose center is hidden by its
+        # own near wall can still have a corner in plain view. Record both;
+        # let the analysis choose.
         for bi, (_, row) in enumerate(footprints.iterrows()):
             verts = np.asarray(row.geometry.exterior.coords)
             vz = np.full(len(verts), roof_z[bi])
@@ -355,7 +411,164 @@ def qc_png(scene, mask, win, transform, footprints, eye_xy, title, path,
     plt.close(fig)
 
 
-def run_self_checks(scene, eyes, masks, obs, X, Y):
+def volume_extent(scene, eye_xy, radius, voxel):
+    """Horizontal sample coords (xs east->, ys north->south) for the volume:
+    a disc of `radius` around the eye, else the whole DEM footprint."""
+    ex, ey = eye_xy
+    if radius is not None:
+        x_lo, x_hi = ex - radius, ex + radius
+        y_lo, y_hi = ey - radius, ey + radius
+    else:
+        x_lo, x_hi = scene.x0, scene.x0 + scene.W * scene.a
+        ya, yb = scene.y0, scene.y0 + scene.H * scene.e
+        y_lo, y_hi = min(ya, yb), max(ya, yb)
+    xs = np.arange(x_lo, x_hi + voxel / 2, voxel)
+    ys = np.arange(y_hi, y_lo - voxel / 2, -voxel)
+    return xs, ys
+
+
+def compute_volume(scene, eye_xyz, xs, ys, levels, azimuth, fov, radius,
+                   pitch=0.0, vfov=180.0, chunk=200_000):
+    """Visibility of a 3D voxel grid. Columns sit on (xs, ys); each carries
+    `levels` heights above its own ground. Returns (ground, vis) where ground
+    is the per-column surface (nrows, ncols) and vis is bool (nrows, ncols,
+    nlevels), already trimmed by the radius and the horizontal/vertical cones.
+    Voxels over nodata ground are not visible (handled by visible_mask)."""
+    ex, ey, ez = eye_xyz
+    X, Y = np.meshgrid(xs, ys)
+    nrows, ncols = X.shape
+    nlev = len(levels)
+    ground = scene.surface_z(X.ravel(), Y.ravel()).reshape(nrows, ncols)
+    zabs = ground[:, :, None] + levels[None, None, :]
+    targets = np.column_stack([
+        np.repeat(X[:, :, None], nlev, axis=2).ravel(),
+        np.repeat(Y[:, :, None], nlev, axis=2).ravel(),
+        zabs.ravel()])
+    vis = scene.visible_mask(eye_xyz, targets, chunk=chunk).reshape(
+        nrows, ncols, nlev)
+
+    dx, dy = X - ex, Y - ey
+    dist = np.hypot(dx, dy)
+    keep = np.ones((nrows, ncols), dtype=bool)
+    if radius is not None:
+        keep &= dist <= radius
+    if azimuth is not None and fov < 360:
+        bearing = np.degrees(np.arctan2(dx, dy)) % 360
+        diff = (bearing - azimuth + 180) % 360 - 180
+        keep &= np.abs(diff) <= fov / 2
+    vis &= keep[:, :, None]
+    if vfov < 180:
+        with np.errstate(invalid="ignore"):
+            elev = np.degrees(np.arctan2(zabs - ez, dist[:, :, None]))
+        vis &= np.abs(elev - pitch) <= vfov / 2
+    return ground, vis
+
+
+def volume_points(xs, ys, levels, ground, vis):
+    """(N,3) world coords of visible voxel centers + their (r,c,l) indices."""
+    r, c, lv = np.nonzero(vis)
+    pts = np.column_stack([xs[c], ys[r], ground[r, c] + levels[lv]])
+    return pts, (r, c, lv)
+
+
+def write_volume_csv(path, pts, count=None):
+    cols = ["x", "y", "z"] + (["count"] if count is not None else [])
+    data = pts if count is None else np.column_stack([pts, count])
+    pd.DataFrame(data, columns=cols).to_csv(path, index=False)
+
+
+def write_volume_ply(path, pts, count=None):
+    header = ["ply", "format ascii 1.0", f"element vertex {len(pts)}",
+              "property float x", "property float y", "property float z"]
+    if count is not None:
+        header.append("property int count")
+    header.append("end_header")
+    with open(path, "w") as f:
+        f.write("\n".join(header) + "\n")
+        if count is None:
+            np.savetxt(f, pts, fmt="%.3f")
+        else:
+            np.savetxt(f, np.column_stack([pts, count]),
+                       fmt=["%.3f", "%.3f", "%.3f", "%d"])
+
+
+def write_volume_npy(path, vis, xs, ys, levels, crs):
+    """Boolean/int voxel grid (rows->ys, cols->xs, depth->levels) + a JSON
+    sidecar carrying the georeferencing needed to rebuild world coords."""
+    np.save(path, vis)
+    meta = {
+        "x0": float(xs[0]), "y0": float(ys[0]),
+        "xstep": float(xs[1] - xs[0]) if len(xs) > 1 else 0.0,
+        "ystep": float(ys[1] - ys[0]) if len(ys) > 1 else 0.0,
+        "levels": [float(v) for v in levels],
+        "z_is_above_local_ground": True,
+        "axes": "vis[row, col, level]; row->y, col->x, level->height AGL",
+        "crs": str(crs),
+    }
+    with open(Path(path).with_suffix(".json"), "w") as f:
+        json.dump(meta, f, indent=2)
+
+
+def write_volume_las(path, pts, crs, count=None):
+    """Visible voxel centers as a LAS/LAZ point cloud (.las/.laz chosen by the
+    path suffix). `count` (combined volume) is stored as intensity. The CRS is
+    written into the header so QGIS georeferences it. Requires laspy, plus the
+    lazrs backend for .laz; missing deps are reported, not raised."""
+    try:
+        import laspy
+        from pyproj import CRS as PyCRS
+    except ImportError as exc:
+        warn("LAS/LAZ skipped", f"install laspy (+lazrs for .laz): {exc}")
+        return
+    if len(pts) == 0:
+        warn("LAS/LAZ skipped", f"no visible points for {Path(path).name}")
+        return
+    header = laspy.LasHeader(point_format=3, version="1.4")
+    header.offsets = pts.min(axis=0)
+    header.scales = [0.001, 0.001, 0.001]   # mm precision on large UTM coords
+    if crs is not None:
+        header.add_crs(PyCRS.from_user_input(str(crs)))
+    las = laspy.LasData(header)
+    las.x, las.y, las.z = pts[:, 0], pts[:, 1], pts[:, 2]
+    if count is not None:
+        las.intensity = np.asarray(count, dtype=np.uint16)
+    las.write(str(path))
+
+
+def volume_qc_png(xs, ys, levels, ground, vis, footprints, eye_xy, title, path):
+    """Top-down audit: hillshade of the (coarse) ground with the highest
+    visible height above ground per column overlaid."""
+    voxel = float(xs[1] - xs[0]) if len(xs) > 1 else 1.0
+    ystep = float(ys[1] - ys[0]) if len(ys) > 1 else -voxel
+    anyvis = vis.any(axis=2)
+    top = np.where(vis, np.arange(len(levels))[None, None, :], -1).max(axis=2)
+    height = np.where(anyvis, levels[np.clip(top, 0, None)], np.nan)
+
+    base = np.nan_to_num(ground, nan=float(np.nanmin(ground)))
+    hs = hillshade(base, voxel)
+    fig, ax = plt.subplots(figsize=(10, 14), dpi=200)
+    ax.imshow(hs, cmap="gray")
+    im = ax.imshow(np.ma.masked_invalid(height), cmap="viridis", alpha=0.6)
+    fig.colorbar(im, ax=ax, fraction=0.046, label="max visible height AGL (m)")
+
+    def to_px(x, y):
+        return (x - xs[0]) / voxel, (y - ys[0]) / ystep
+
+    for geom in footprints.geometry:
+        polys = geom.geoms if geom.geom_type == "MultiPolygon" else [geom]
+        for poly in polys:
+            gx, gy = poly.exterior.xy
+            cx, cy = to_px(np.asarray(gx), np.asarray(gy))
+            ax.plot(cx, cy, color="cyan", linewidth=0.4)
+    epx, epy = to_px(*eye_xy)
+    ax.plot(epx, epy, "r*", markersize=14, markeredgecolor="white")
+    ax.set_title(title)
+    ax.axis("off")
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def run_self_checks(scene, eyes, masks, obs, X, Y, eye_height=EYE_HEIGHT):
     print("\n" + "=" * 70)
     print("SELF-VERIFICATION")
     print("=" * 70)
@@ -390,7 +603,7 @@ def run_self_checks(scene, eyes, masks, obs, X, Y):
         tx, ty = X[r, c], Y[r, c]
         tz = scene.surface_z(tx, ty)[0]
         fwd = scene.is_visible(eyes[0], (tx, ty, tz))
-        rev = scene.is_visible((tx, ty, tz + EYE_HEIGHT),
+        rev = scene.is_visible((tx, ty, tz + eye_height),
                                (eyes[0][0], eyes[0][1], eyes[0][2]))
         check(fwd == rev, "forward/reverse LOS agree on a sample cell")
 
@@ -405,6 +618,9 @@ def main():
     p.add_argument("--margin", type=float, default=60.0,
                    help="core-window margin (m); ignored when --radius is set")
     p.add_argument("--chunk", type=int, default=200_000)
+    p.add_argument("--eye-height", type=float, default=EYE_HEIGHT,
+                   help=f"observer eye height (m) above surface "
+                        f"(default {EYE_HEIGHT:g})")
     p.add_argument("--point", type=float, nargs=2, action="append",
                    metavar=("X", "Y"),
                    help="observer in the DEM CRS; repeatable; overrides --observers")
@@ -416,9 +632,34 @@ def main():
     p.add_argument("--azimuth", type=float, default=None,
                    help="view-cone center, compass degrees (0=N, 90=E, clockwise)")
     p.add_argument("--fov", type=float, default=360.0,
-                   help="view-cone full width in degrees (default 360 = omni)")
+                   help="horizontal view-cone full width in degrees "
+                        "(default 360 = omni)")
+    p.add_argument("--pitch", type=float, default=0.0,
+                   help="vertical view-cone center, elevation degrees "
+                        "(0=horizontal, + up; default 0)")
+    p.add_argument("--vfov", type=float, default=180.0,
+                   help="vertical view-cone full width in degrees "
+                        "(default 180 = unconstrained)")
     p.add_argument("--no-graph", action="store_true",
                    help="skip the visibility graph (useful for single/point runs)")
+    p.add_argument("--volume", action="store_true",
+                   help="also compute a 3D visibility volume (off by default)")
+    p.add_argument("--voxel", type=float, default=2.0,
+                   help="volume horizontal spacing (m); coarse default 2.0")
+    p.add_argument("--zmin", type=float, default=0.0,
+                   help="volume lowest sample height above ground (m)")
+    p.add_argument("--zmax", type=float, default=30.0,
+                   help="volume highest sample height above ground (m)")
+    p.add_argument("--zstep", type=float, default=2.0,
+                   help="volume vertical spacing (m); coarse default 2.0")
+    p.add_argument("--volume-fullres", action="store_true",
+                   help="sample the volume at native DEM resolution "
+                        "(voxel = zstep = pixel size); can be very large")
+    p.add_argument("--volume-format", nargs="+", default=["csv"],
+                   choices=["csv", "ply", "npy", "las", "laz", "all"],
+                   help="volume output format(s); default csv. las/laz are "
+                        "point clouds for QGIS/CloudCompare (need laspy); "
+                        "'all' = csv,ply,npy")
     args = p.parse_args()
 
     device = select_device()
@@ -459,21 +700,29 @@ def main():
     check(len(observers) >= 1, "at least one observer", f"{len(observers)}")
 
     labels = [o[0] for o in observers]
+    eye_height = args.eye_height
     eyes = []
     for label, x, y in observers:
         sz = float(scene.surface_z(x, y)[0])
         if not np.isfinite(sz):
             warn("observer outside DEM / on nodata", f"{label} ({x:.1f}, {y:.1f})")
-        eyes.append((x, y, sz + EYE_HEIGHT))
+        eyes.append((x, y, sz + eye_height))
     for label, e in zip(labels, eyes):
         print(f"  {label}: ({e[0]:.1f}, {e[1]:.1f})  eye_z {e[2]:.2f} m")
 
-    sector = args.azimuth is not None and args.fov < 360
+    h_sector = args.azimuth is not None and args.fov < 360
+    v_sector = args.vfov < 180
+    sector = h_sector or v_sector
     mode = f"radius {args.radius:g} m" if args.radius else f"core window +{args.margin:g} m"
-    if sector:
-        mode += f"  |  sector az {args.azimuth:g}° fov {args.fov:g}°"
+    if h_sector:
+        mode += f"  |  az {args.azimuth:g}° fov {args.fov:g}°"
+    if v_sector:
+        mode += f"  |  pitch {args.pitch:g}° vfov {args.vfov:g}°"
     print(f"  mode: {mode}")
 
+    # A shared analysis window exists only when no per-observer radius is set;
+    # with a radius each observer gets its own window centered on the point, so
+    # there is no common grid to stack into the combined/count layers.
     shared = args.radius is None
     if shared:
         base_win, _ = core_window(footprints.total_bounds, transform, margin=args.margin)
@@ -484,8 +733,12 @@ def main():
     print("\n" + "=" * 70)
     print("PER-OBSERVER VIEWSHEDS")
     print("=" * 70)
-    sect_txt = (f" — az {args.azimuth:g}° fov {args.fov:g}°"
-                if args.azimuth is not None and args.fov < 360 else "")
+    sect_bits = []
+    if h_sector:
+        sect_bits.append(f"az {args.azimuth:g}° fov {args.fov:g}°")
+    if v_sector:
+        sect_bits.append(f"pitch {args.pitch:g}° vfov {args.vfov:g}°")
+    sect_txt = f" — {', '.join(sect_bits)}" if sect_bits else ""
     args.out_dir.mkdir(parents=True, exist_ok=True)
     masks, grids = [], []
     for label, eye in zip(labels, eyes):
@@ -495,7 +748,8 @@ def main():
             win = observer_window(scene, eye[:2], args.radius)
             X, Y, Z, shape, _ = target_grid(scene, win, transform)
         mask = compute_viewshed(scene, eye, X, Y, Z, shape)
-        apply_view_constraints(mask, X, Y, eye[:2], args.azimuth, args.fov, args.radius)
+        apply_view_constraints(mask, X, Y, Z, eye, args.azimuth, args.fov,
+                               args.radius, args.pitch, args.vfov)
         masks.append(mask)
         grids.append((X, Y, shape))
         n_vis = int((mask == 1).sum())
@@ -525,6 +779,71 @@ def main():
     elif not shared:
         print("  (radius mode: per-observer windows differ — no combined/count layer)")
 
+    if args.volume:
+        print("\n" + "=" * 70)
+        print("3D VISIBILITY VOLUME")
+        print("=" * 70)
+        voxel = scene.px if args.volume_fullres else args.voxel
+        zstep = scene.px if args.volume_fullres else args.zstep
+        levels = np.arange(args.zmin, args.zmax + zstep / 2, zstep)
+        formats = ({"csv", "ply", "npy"} if "all" in args.volume_format
+                   else set(args.volume_format))
+        print(f"  voxel {voxel:g} m  |  z {args.zmin:g}..{args.zmax:g} m "
+              f"step {zstep:g} ({len(levels)} levels)  |  formats "
+              f"{','.join(sorted(formats))}")
+        combine = shared and len(eyes) > 1
+        count = None
+        base = None
+        for label, eye in zip(labels, eyes):
+            xs, ys = volume_extent(scene, eye[:2], args.radius, voxel)
+            npts = len(xs) * len(ys) * len(levels)
+            if npts > 5_000_000:
+                warn("large volume", f"{label}: {npts:,} sample points")
+            ground, vis = compute_volume(
+                scene, eye, xs, ys, levels, args.azimuth, args.fov,
+                args.radius, args.pitch, args.vfov, args.chunk)
+            nvis = int(vis.sum())
+            print(f"  {label}: {nvis:,} visible voxels of {npts:,}")
+            pts, _ = volume_points(xs, ys, levels, ground, vis)
+            stem = args.out_dir / f"viewshed_volume_{label}"
+            if "csv" in formats:
+                write_volume_csv(stem.with_suffix(".csv"), pts)
+            if "ply" in formats:
+                write_volume_ply(stem.with_suffix(".ply"), pts)
+            if "npy" in formats:
+                write_volume_npy(stem.with_suffix(".npy"), vis, xs, ys, levels, crs)
+            if "las" in formats:
+                write_volume_las(stem.with_suffix(".las"), pts, crs)
+            if "laz" in formats:
+                write_volume_las(stem.with_suffix(".laz"), pts, crs)
+            volume_qc_png(xs, ys, levels, ground, vis, footprints, eye[:2],
+                          f"Volume — point {label}{sect_txt}",
+                          stem.with_suffix(".png"))
+            if combine:
+                if count is None:
+                    count = vis.astype(np.int32)
+                    base = (xs, ys, ground)
+                else:
+                    count += vis
+        if combine and count is not None:
+            xs, ys, ground = base
+            cvis = count > 0
+            pts, (r, c, lv) = volume_points(xs, ys, levels, ground, cvis)
+            cvals = count[r, c, lv]
+            stem = args.out_dir / "viewshed_volume_combined"
+            if "csv" in formats:
+                write_volume_csv(stem.with_suffix(".csv"), pts, cvals)
+            if "ply" in formats:
+                write_volume_ply(stem.with_suffix(".ply"), pts, cvals)
+            if "npy" in formats:
+                write_volume_npy(stem.with_suffix(".npy"), count, xs, ys, levels, crs)
+            if "las" in formats:
+                write_volume_las(stem.with_suffix(".las"), pts, crs, cvals)
+            if "laz" in formats:
+                write_volume_las(stem.with_suffix(".laz"), pts, crs, cvals)
+            print(f"  combined: {int(cvis.sum()):,} voxels visible to "
+                  f"≥1 observer")
+
     obs = None
     if not args.no_graph:
         print("\n" + "=" * 70)
@@ -543,11 +862,11 @@ def main():
               f"{int(b.visible.sum())}  visible(any vertex): "
               f"{int(b.visible_any_vertex.sum())}")
         if sector:
-            print("  (graph LOS is omnidirectional; --azimuth/--fov apply to "
-                  "rasters only)")
+            print("  (graph LOS is omnidirectional; --azimuth/--fov/--pitch/"
+                  "--vfov apply to rasters and volume only)")
 
     X0, Y0, _ = grids[0]
-    run_self_checks(scene, eyes, masks, obs, X0, Y0)
+    run_self_checks(scene, eyes, masks, obs, X0, Y0, eye_height)
 
     print("\n" + "=" * 70)
     if failures:

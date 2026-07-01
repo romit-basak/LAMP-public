@@ -80,6 +80,7 @@ def load_backdrop(ortho_path, scene):
             a = src.read()
         if a.shape[0] >= 3:
             img = np.transpose(a[:3], (1, 2, 0)).astype("float64")
+            # +1e-9 guards against a flat image (zero range) dividing by zero.
             img = (img - img.min()) / (np.ptp(img) + 1e-9)
             return img
         return a[0].astype("float64")
@@ -158,7 +159,8 @@ def main():
               "engine surface shares the baseline grid",
               f"{scene.dem_np.shape} @ {transform.to_gdal()[:2]}")
 
-    obs_xy = load_observers(args.observers, crs)
+    obs_list, _ = load_observers(args.observers, crs)
+    obs_xy = [(x, y) for _, x, y in obs_list]
     check(len(obs_xy) == 3, "3 observers", f"{len(obs_xy)}")
     for i, (x, y) in enumerate(obs_xy, 1):
         print(f"  observer {i} -> mark{i}: ({x:.1f}, {y:.1f})")
@@ -169,6 +171,8 @@ def main():
 
     print("\nENGINE RUNS + METRICS")
     rows, primary_masks = [], None
+    # The baseline's observer height was never recorded, so sweep candidate
+    # heights and report the sensitivity rather than guessing a single value.
     for h in args.eye_heights:
         masks = []
         for (x, y) in obs_xy:

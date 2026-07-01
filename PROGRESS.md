@@ -3,6 +3,27 @@
 > Running record of major work on the viewshed half of LAMP. Newest entries at the top.
 > Keep entries brief: what was done, key findings/decisions, open questions raised.
 
+## 2026-06-25 — Code walkthrough doc + fixed compare_baseline.py
+
+- New [`docs/CODE_WALKTHROUGH.md`](docs/CODE_WALKTHROUGH.md): narrated tour of all five scripts — what each does, the design rationale, and what would break if done otherwise (Scene seam, eye-relative float32 coords, running-max LOS, the two MPS gotchas, view-cone post-mask, additive `visible_mask` signature, self-checks-vs-ground-truth). Closes with the `load_observers` break below as a coupling case study. Linked from the project guide's References section.
+- `compare_baseline.py` had been crashing since the 06-13 id-selection refactor: it still called `load_observers` expecting a list of `(x, y)` pairs, but the function now returns `(obs_list, has_id)` with `(oid, x, y)` triples → `ValueError` at the "3 observers" check. The mid-term-gating comparison was silently unrunnable.
+- Fix: unpack the 2-tuple and reduce to `(x, y)` pairs (`obs_list, _ = load_observers(...)`). Re-ran clean — reproduces the recorded 97.2–98.7% agreement / IoU 0.86–0.92, confirming the fix restores behavior rather than masking it.
+
+## 2026-06-29 — LAS/LAZ volume output (point clouds for QGIS)
+
+- Added `las`/`laz` to `--volume-format` in `scripts/viewshed.py` and `--to` in `scripts/volume_convert.py`, writing georeferenced point clouds (CRS in the LAS header) so QGIS point-cloud layers can color by Z with a height ramp and CloudCompare opens them directly. Combined-volume observer count is stored as LAS intensity. `all` stays `csv,ply,npy` — LAS/LAZ are explicit opt-ins; laspy is lazy-imported so the engine still runs without it.
+- New deps **laspy 2.7.0 + lazrs 0.8.1** (cross-platform CPU wheels) pinned in `requirements.txt`; remote datastore freeze left untouched. Validated: LAZ round-trips coords/intensity and parses back to EPSG:32636.
+- Prompted by QGIS work: the 3D *vector* material color can't be data-defined per point (no continuous height ramp), so a native point-cloud format is the way to get height-colored 3D in QGIS. (Separately: render the DEM/buildings in 3D by setting the 3D scene **Terrain** to the DEM-with-buildings, so absolute-Z ground/buildings align with the floating cloud.)
+
+## 2026-06-24 — Vertical view cone + 3D volume + configurable eye height (engine extension)
+
+- Prompted by mentor review: the engine was read as "2D only." It is a true 2.5D heightfield ray-caster (the LOS test already does an elevation-angle reduction), so this round makes the vertical dimension explicit and demonstrable rather than changing the physics. **Window apertures deferred** to step 2 per mentors.
+- `scripts/viewshed.py` now has a vertical view cone — `--pitch` (elevation center, 0=horizontal, + up) and `--vfov` (full vertical width, default 180 = unconstrained) — mirroring `--azimuth`/`--fov`. `apply_view_constraints` gained the vertical sector; applies to rasters and the volume, not the graph (same as horizontal). Banner/QC titles show the vertical sector.
+- New optional 3D **visibility volume** (`--volume`, off by default): samples a voxel grid (`--voxel`/`--zmin`/`--zmax`/`--zstep`, `--volume-fullres` for native res) over a `--radius` disc or, if no radius, the whole DEM. Reuses `visible_mask` (it already accepts per-target z), so no change to `compute_viewshed`/`visible_mask` signatures (keeps `compare_baseline.py` intact). Writes CSV (canonical), PLY point cloud, and/or NPY+JSON via `--volume-format {csv,ply,npy,all}`, plus a top-down QC PNG and a combined count in shared mode.
+- `scripts/volume_convert.py` (new): promotes a saved volume CSV to PLY / NPY+sidecar / per-z GeoTIFF slices without recomputing — so CSV stays the lightweight default.
+- `--eye-height` added (default stays 1.5 m); threaded through eye construction and the reverse-LOS self-check.
+- Hygiene pass: removed unused `Point` import, neutralized guide/assistant references in code comments and this log, AST-checked for unused locals. Mentors' note on **distance-based visual obscurity** (acuity falls off with range; unbounded rays overstate far visibility) recorded as a planned refinement in the project guide — not implemented.
+
 ## 2026-06-13 — id-based observer selection (engine CLI extension)
 
 - `scripts/viewshed.py` now reads the observer file's `id` field: `load_observers` returns `(id, x, y)` (id field if present, else 1-based row index). New `--ids N [N …]` selects specific observers by id from `--observers` (fails cleanly listing any missing id); omitting `--ids` runs the whole table. Built for the mentors' forthcoming exhaustive, id-referenced point set — so observers are chosen by id, not coordinates.
@@ -44,7 +65,7 @@
 
 ## 2026-06-10/11 — Local environment + data verification
 
-- Device-agnostic `requirements.txt` at project root (CUDA pins stripped or behind `sys_platform == "win32"` markers); raw remote freeze preserved in datastore. Convention codified in CLAUDE.md: cuda → mps → cpu, CuPy-or-NumPy `xp` pattern.
+- Device-agnostic `requirements.txt` at project root (CUDA pins stripped or behind `sys_platform == "win32"` markers); raw remote freeze preserved in datastore. Convention codified in the project guide: cuda → mps → cpu, CuPy-or-NumPy `xp` pattern.
 - `.venv` built with **uv**, Python 3.13 (matches remote); all 70 packages installed; MPS verified.
 - `Marks_Brief2.*` (3-point proposal sample) filed into `100_Data/160_ViewpointMarks/` (local-only folder; full set TBD with mentors). Points are MultiPoint/EPSG:4326 — explode + reproject on load.
 - New `scripts/sanity_checks.py`: all assets EPSG:32636; 263 footprints with `Elevation` 0.7–8 m; 263 gpkgs valid; viewpoints inside DEM.
@@ -55,4 +76,4 @@
 - Identified viewshed-relevant subset (~2.1 GB of the ~200 GB datastore) from `tree.txt`; SAR imagery (`140_SAR_Imagery/`) stays remote.
 - PowerShell staging + zip on the remote; transferred via OneDrive after RealVNC file transfer stalled; SHA256-verified.
 - Windows `Compress-Archive` backslash paths extracted flat on macOS — restructured 305 files into `LAMP_DataStore/ElBagawat/` mirroring the remote layout.
-- Discovered the CLAUDE.md asset names were conceptual; real paths recorded in CLAUDE.md (gpkg IDs are 1–263, not 1–99; no literal `Site_Plan.pdf` — plan is `bagawat print.pdf` + `BaseSiteCAD/`).
+- Discovered the project guide's asset names were conceptual; real paths recorded in the project guide (gpkg IDs are 1–263, not 1–99; no literal `Site_Plan.pdf` — plan is `bagawat print.pdf` + `BaseSiteCAD/`).

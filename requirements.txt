@@ -34,6 +34,8 @@ joblib==1.5.3
 jupyter_client==8.8.0
 jupyter_core==5.9.1
 kiwisolver==1.5.0
+laspy==2.7.0
+lazrs==0.8.1
 lazy-loader==0.5
 MarkupSafe==3.0.3
 matplotlib==3.10.9
