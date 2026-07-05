@@ -34,6 +34,7 @@ DEM_REGEN = max(
     (ROOT / "200_Projects/220_BuildingsToDEM").glob("DEMWithBuildings-0.4m-*.tif"),
     default=None)
 VIEWPOINTS = ROOT / "100_Data/160_ViewpointMarks/Marks_Brief2.shp"
+DOME_INVENTORY = ROOT / "200_Projects/220_BuildingsToDEM/dome_inventory.csv"
 GPKG_DIR = ROOT / "200_Projects/220_BuildingsToDEM/Temp_Buildings_Explode/IndividualBuildings"
 
 failures = []

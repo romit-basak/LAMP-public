@@ -18,6 +18,10 @@ horizontal fov and vertical vfov):
 Optional 3D visibility volume (coarse voxels; csv/ply/npy/las/laz):
     .venv/bin/python scripts/viewshed.py --point 254210 2820958 \\
         --radius 150 --volume --volume-format laz --no-graph
+Include dome roofs in the ray-cast surface (needs build_dome_layer.py output;
+off by default, experimental pending mentor visual review):
+    .venv/bin/python scripts/viewshed.py --point 254210 2820958 \\
+        --radius 150 --domes --no-graph
 Any point file, 360°:
     .venv/bin/python scripts/viewshed.py --observers my_points.shp
 
@@ -45,10 +49,12 @@ import numpy as np
 import pandas as pd
 import rasterio
 import torch
+from rasterio.features import geometry_mask
 from rasterio.windows import Window, transform as window_transform
 from shapely.geometry import LineString
 
-from sanity_checks import ROOT, DEM_REGEN, FOOTPRINTS, VIEWPOINTS, check, warn, failures
+from sanity_checks import (ROOT, DEM_REGEN, FOOTPRINTS, VIEWPOINTS,
+                           DOME_INVENTORY, check, warn, failures)
 from build_dem_with_buildings import hillshade, core_window
 
 EYE_HEIGHT = 1.5          # default eye height (m) above surface; late-antique
@@ -227,6 +233,63 @@ class HeightfieldScene:
 def load_dem(path):
     with rasterio.open(path) as src:
         return (src.read(1), src.transform, src.crs, src.nodata, src.profile.copy())
+
+
+def apply_dome_overlay(dem_np, transform, nodata, csv_path, footprints):
+    """Raise `dem_np` with hemispherical dome caps from a dome-layer CSV
+    (`scripts/build_dome_layer.py`). A dome is a heightfield bump — solid,
+    springing from the surface already at its center — so this only ever
+    raises cells (`np.maximum`), needing no change to the Scene/ray-marching
+    code that consumes the array afterwards. The springing height is sampled
+    fresh from `dem_np` itself (not the CSV's stored `roof_z`), so the overlay
+    stays consistent with whatever `--dem` raster is actually loaded. Each cap
+    is also clipped to its own footprint polygon, so an over-generous CSV
+    radius can never spill the dome onto neighboring ground or buildings.
+    Returns (dem_np, n_domes_applied, n_cells_raised)."""
+    df = pd.read_csv(csv_path)
+    df = df[df["has_dome"].astype(str).str.lower() == "true"]
+    geom_by_id = {int(r["ID"]): r.geometry for _, r in footprints.iterrows()}
+    H, W = dem_np.shape
+    a, e, x0, y0 = transform.a, transform.e, transform.c, transform.f
+    px = abs(a)
+    out = dem_np.copy()
+    n_applied, n_cells = 0, 0
+    for _, row in df.iterrows():
+        bid = int(row["ID"])
+        cx, cy, r = float(row["cx"]), float(row["cy"]), float(row["radius_m"])
+        ci = int(round((cx - x0) / a - 0.5))
+        ri = int(round((cy - y0) / e - 0.5))
+        if not (0 <= ri < H and 0 <= ci < W):
+            warn("dome outside DEM extent", f"ID {bid} ({cx:.1f}, {cy:.1f})")
+            continue
+        spring = float(dem_np[ri, ci])
+        if nodata is not None and spring == nodata:
+            warn("dome center on nodata", f"ID {bid}")
+            continue
+        geom = geom_by_id.get(bid)
+        if geom is None:
+            warn("dome has no matching footprint", f"ID {bid}")
+            continue
+        rpix = int(math.ceil(r / px)) + 1
+        r0, r1 = max(ri - rpix, 0), min(ri + rpix + 1, H)
+        c0, c1 = max(ci - rpix, 0), min(ci + rpix + 1, W)
+        rows_ix, cols_ix = np.mgrid[r0:r1, c0:c1]
+        xs = x0 + (cols_ix + 0.5) * a
+        ys = y0 + (rows_ix + 0.5) * e
+        d2 = (xs - cx) ** 2 + (ys - cy) ** 2
+        inside = d2 <= r * r
+        win_transform = window_transform(Window(c0, r0, c1 - c0, r1 - r0), transform)
+        inside &= ~geometry_mask([geom], (r1 - r0, c1 - c0), win_transform,
+                                 invert=False)
+        if nodata is not None:
+            inside &= out[r0:r1, c0:c1] != nodata
+        cap = spring + np.sqrt(np.maximum(r * r - d2, 0.0))
+        patch = out[r0:r1, c0:c1]
+        raised = inside & (cap > patch)
+        patch[raised] = cap[raised]
+        n_applied += 1
+        n_cells += int(raised.sum())
+    return out, n_applied, n_cells
 
 
 def load_observers(path, crs):
@@ -660,18 +723,32 @@ def main():
                    help="volume output format(s); default csv. las/laz are "
                         "point clouds for QGIS/CloudCompare (need laspy); "
                         "'all' = csv,ply,npy")
+    p.add_argument("--domes", action="store_true",
+                   help="bake dome caps into the ray-casting surface before "
+                        "analysis (off by default; needs dome_inventory.csv "
+                        "from scripts/build_dome_layer.py)")
+    p.add_argument("--dome-inventory", type=Path, default=DOME_INVENTORY,
+                   help="dome inventory CSV to use with --domes")
     args = p.parse_args()
 
     device = select_device()
     print("=" * 70)
-    print(f"DEVICE: {device}   DEM: {Path(args.dem).name}")
+    print(f"DEVICE: {device}   DEM: {Path(args.dem).name}"
+          f"{'  + domes' if args.domes else ''}")
     print("=" * 70)
 
     dem, transform, crs, nodata, profile = load_dem(args.dem)
     check(crs is not None and crs.is_projected, "DEM CRS projected", str(crs))
-    scene = HeightfieldScene(dem, transform, nodata, device)
-
     footprints = gpd.read_file(args.footprints).to_crs(crs)
+    if args.domes:
+        check(args.dome_inventory.exists(), "dome inventory exists",
+              f"{args.dome_inventory} — run scripts/build_dome_layer.py first")
+        if failures:
+            sys.exit(1)
+        dem, n_domes, n_cells = apply_dome_overlay(
+            dem, transform, nodata, args.dome_inventory, footprints)
+        print(f"  domes: {n_domes} chapels overlaid, {n_cells:,} cells raised")
+    scene = HeightfieldScene(dem, transform, nodata, device)
     if args.point:
         observers = [(f"obs{i}", x, y) for i, (x, y) in enumerate(args.point, 1)]
         print(f"  observers: {len(observers)} inline --point(s)")

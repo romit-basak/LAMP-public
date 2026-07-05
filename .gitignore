@@ -1,4 +1,5 @@
 .DS_Store
 LAMP_DataStore
-*.qgz
+*.qgz~
 *.tif
+!Task_2/*.tif
