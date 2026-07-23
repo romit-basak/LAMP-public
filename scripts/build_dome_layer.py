@@ -49,14 +49,16 @@ from scipy import ndimage
 from shapely.geometry import Point
 from shapely.ops import polylabel
 
-from sanity_checks import ROOT, DEM_BASE_04, FOOTPRINTS, check, failures
+from sanity_checks import ROOT, DEM_BASE_04, FOOTPRINTS, check, warn, failures
 
 ORTHO = ROOT / ("100_Data/150_DigitalElevationModel/Generated_DEMs/"
                 "Current_DEM/Bagawat-DEM-NewImageryOnly-0.4m-ORTHOPHOTO.tif")
 XLSX = ROOT / "100_Data/120_SiteReport/Bagawat Data From Excavation Report.xlsx"
 
 DOMED_TYPES = {4, 5, 6, 7, 9}     # site report Ch. III (pp. 20-23 of the PDF)
-FLAT_TYPES = {1, 2, 3}            # wooden-beam flat roofs
+# Types 1/2/3 (flat, wooden-beam) and 8/10 (composite/barrel-vaulted) are the
+# rest of the typology; they never reach the domed branch below, so there is
+# no separate "flat types" set to check against.
 R_MIN = 0.8                       # smallest credible dome radius (m)
 R_FRAC_MAX = 0.95                 # radius cap as a fraction of the inradius
 CLASS_STEP = 0.5                  # gpkg layer binning (m)
@@ -76,20 +78,26 @@ def load_typology(path):
     return out
 
 
+def _largest_poly(geom):
+    """The largest sub-polygon of a (possibly multi-part) footprint. A
+    handful of buildings are digitized as MultiPolygon (a detached
+    outbuilding sharing one ID); the dome math below only ever cares
+    about the main chamber, so it always operates on the biggest part."""
+    return (max(geom.geoms, key=lambda g: g.area)
+            if geom.geom_type == "MultiPolygon" else geom)
+
+
 def inradius_point(geom):
     """(polylabel point, its clearance) — center of the largest inscribed
     circle and the distance to the boundary."""
-    poly = max(geom.geoms, key=lambda g: g.area) \
-        if geom.geom_type == "MultiPolygon" else geom
+    poly = _largest_poly(geom)
     c = polylabel(poly, tolerance=0.05)
     return c, poly.exterior.distance(c)
 
 
 def clearance(geom, x, y):
     """Distance from (x, y) to the footprint wall (largest part's boundary)."""
-    poly = max(geom.geoms, key=lambda g: g.area) \
-        if geom.geom_type == "MultiPolygon" else geom
-    return poly.exterior.distance(Point(x, y))
+    return _largest_poly(geom).exterior.distance(Point(x, y))
 
 
 def roof_plane_z(geom, elevation, dem, x, y):
@@ -99,8 +107,7 @@ def roof_plane_z(geom, elevation, dem, x, y):
     so ground-at-center + height rides above the rendered roof wherever the
     center sits on a local high — anchoring to the vertex plane keeps dome
     spheres flush with the roof QGIS actually draws."""
-    poly = max(geom.geoms, key=lambda g: g.area) \
-        if geom.geom_type == "MultiPolygon" else geom
+    poly = _largest_poly(geom)
     verts = np.asarray(poly.exterior.coords)[:-1]
     vz = np.array([v[0] for v in dem.sample([(vx, vy) for vx, vy in verts])],
                   dtype=float)
@@ -154,12 +161,22 @@ def detect_dome(ortho, transform, geom):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--footprints", type=Path, default=FOOTPRINTS)
-    p.add_argument("--xlsx", type=Path, default=XLSX)
-    p.add_argument("--ortho", type=Path, default=ORTHO)
-    p.add_argument("--dem", type=Path, default=DEM_BASE_04)
+    p.add_argument("--footprints", type=Path, default=FOOTPRINTS,
+                   help="building footprint polygons (carries the ID and "
+                        "Elevation/height fields)")
+    p.add_argument("--xlsx", type=Path, default=XLSX,
+                   help="excavation-report spreadsheet; source of the "
+                        "chapel-typology Type column")
+    p.add_argument("--ortho", type=Path, default=ORTHO,
+                   help="grayscale orthophoto used to measure dome "
+                        "center/radius by brightness")
+    p.add_argument("--dem", type=Path, default=DEM_BASE_04,
+                   help="bare-earth DEM used for the vertex roof-plane "
+                        "height fit")
     p.add_argument("--out-dir", type=Path,
-                   default=ROOT / "200_Projects/220_BuildingsToDEM")
+                   default=ROOT / "200_Projects/220_BuildingsToDEM",
+                   help="where dome_inventory.csv / domes.gpkg / "
+                        "dome_qc.png are written")
     p.add_argument("--from-inventory", type=Path, default=None,
                    help="skip detection; rebuild gpkg/QC from an edited "
                         "dome_inventory.csv")
@@ -233,7 +250,12 @@ def main():
                 r = np.nan                       # filled from median ratio
                 base.update(source="fallback")
                 fallback.append(bid)
-            elev = float(frow["Elevation"]) if pd.notna(frow["Elevation"]) else 0.0
+            if pd.notna(frow["Elevation"]):
+                elev = float(frow["Elevation"])
+            else:
+                warn("domed building missing Elevation; treated as 0 m",
+                     f"ID {bid}")
+                elev = 0.0
             base.update(has_dome=True, cx=cx, cy=cy, radius_m=r,
                         roof_z=roof_plane_z(geom, elev, dem, cx, cy))
             rows.append(base)

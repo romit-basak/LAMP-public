@@ -75,15 +75,20 @@ def to_px(x, y, transform):
 
 
 def load_backdrop(ortho_path, scene):
+    """Grayscale/RGB image behind the QC overlays, 2nd/98th-percentile
+    contrast-stretched the same way every other orthophoto display in
+    this project is (build_dome_layer.py's QC, observer_view.py's ortho
+    drape) — a plain min/max stretch lets one hot pixel wash out the
+    whole image. Both project orthophotos are single-band in practice,
+    so the single-band branch is the one that actually runs; falls
+    back to a computed hillshade if no orthophoto file exists at all."""
     if ortho_path.exists():
         with rasterio.open(ortho_path) as src:
             a = src.read()
-        if a.shape[0] >= 3:
-            img = np.transpose(a[:3], (1, 2, 0)).astype("float64")
-            # +1e-9 guards against a flat image (zero range) dividing by zero.
-            img = (img - img.min()) / (np.ptp(img) + 1e-9)
-            return img
-        return a[0].astype("float64")
+        img = (np.transpose(a[:3], (1, 2, 0)) if a.shape[0] >= 3
+               else a[0]).astype("float64")
+        lo, hi = np.nanpercentile(img, [2, 98])
+        return np.clip((img - lo) / max(hi - lo, 1e-9), 0, 1)
     from build_dem_with_buildings import hillshade
     return hillshade(scene.dem_np, scene.px)
 
@@ -126,13 +131,31 @@ def overlay_rgba(mask, valid, color):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--baseline-dir", type=Path, default=TASK2)
-    p.add_argument("--dem", type=Path, default=TASK2 / "DEM_Subset-WithBuildings.tif")
-    p.add_argument("--footprints", type=Path, default=TASK2 / "BuildingFootprints.shp")
-    p.add_argument("--observers", type=Path, default=TASK2 / "Marks_Brief2.shp")
-    p.add_argument("--ortho", type=Path, default=TASK2 / "OrthoImage_Subset.tif")
-    p.add_argument("--out-dir", type=Path, default=TASK2 / "comparison")
-    p.add_argument("--eye-heights", type=float, nargs="+", default=[1.5, 1.75])
+    p.add_argument("--baseline-dir", type=Path, default=TASK2,
+                   help="directory holding the GRASS r.viewshed baseline "
+                        "(viewshed_mark{N}_curr/old.tif)")
+    p.add_argument("--dem", type=Path,
+                   default=TASK2 / "DEM_Subset-WithBuildings.tif",
+                   help="shared surface both sides are evaluated on "
+                        "(the baseline's exact grid/datum)")
+    p.add_argument("--footprints", type=Path,
+                   default=TASK2 / "BuildingFootprints.shp",
+                   help="footprints on the baseline grid, for figure overlays")
+    p.add_argument("--observers", type=Path,
+                   default=TASK2 / "Marks_Brief2.shp",
+                   help="observer points, matched 1:1 in file order to "
+                        "viewshed_mark{1,2,3}_*.tif")
+    p.add_argument("--ortho", type=Path,
+                   default=TASK2 / "OrthoImage_Subset.tif",
+                   help="orthophoto backdrop for the QC figures (falls "
+                        "back to a computed hillshade if missing)")
+    p.add_argument("--out-dir", type=Path, default=TASK2 / "comparison",
+                   help="where the metrics CSV, PNGs, and report are written")
+    p.add_argument("--eye-heights", type=float, nargs="+",
+                   default=[1.5, 1.75],
+                   help="eye heights (m) to sweep; the FIRST value is the "
+                        "one used for every figure and the written engine_* "
+                        "mask TIFFs, so its position in the list matters")
     args = p.parse_args()
 
     device = select_device()
@@ -141,9 +164,23 @@ def main():
     print(f"DEVICE: {device}   surface: {args.dem.name}")
     print("=" * 70)
 
+    dem, transform, crs, nodata, profile = load_dem(args.dem)
+    scene = HeightfieldScene(dem, transform, nodata, device)
+
+    obs_list, _ = load_observers(args.observers, crs)
+    obs_xy = [(x, y) for _, x, y in obs_list]
+    n_obs = len(obs_xy)
+    # Every loop below (baseline files, metrics, figures) derives its count
+    # from n_obs rather than repeating a literal "3" — this check is what
+    # guarantees that assumption is actually true for whatever observer
+    # file is passed in, instead of just hoping it stays in sync.
+    check(n_obs == 3, "3 observers", f"{n_obs}")
+    for i, (x, y) in enumerate(obs_xy, 1):
+        print(f"  observer {i} -> mark{i}: ({x:.1f}, {y:.1f})")
+
     print("\nBASELINE (r.viewshed, _curr)")
     base_masks, base_shape = [], None
-    for i in (1, 2, 3):
+    for i in range(1, n_obs + 1):
         vis, shp, rng = binarize_baseline(
             args.baseline_dir / f"viewshed_mark{i}_curr.tif")
         base_masks.append(vis)
@@ -151,23 +188,22 @@ def main():
         check(0 < vis.sum() < vis.size, f"mark{i} baseline binarizes sanely",
               f"{int(vis.sum())}/{vis.size} visible, angle range {rng}")
 
-    dem, transform, crs, nodata, profile = load_dem(args.dem)
-    scene = HeightfieldScene(dem, transform, nodata, device)
     with rasterio.open(args.baseline_dir / "viewshed_mark1_curr.tif") as b:
         check(scene.dem_np.shape == base_shape and
               transform.almost_equals(b.transform, precision=1e-6),
               "engine surface shares the baseline grid",
               f"{scene.dem_np.shape} @ {transform.to_gdal()[:2]}")
 
-    obs_list, _ = load_observers(args.observers, crs)
-    obs_xy = [(x, y) for _, x, y in obs_list]
-    check(len(obs_xy) == 3, "3 observers", f"{len(obs_xy)}")
-    for i, (x, y) in enumerate(obs_xy, 1):
-        print(f"  observer {i} -> mark{i}: ({x:.1f}, {y:.1f})")
-
     full = Window(0, 0, scene.W, scene.H)
     X, Y, Z, shape, _ = target_grid(scene, full, transform)
-    valid = np.ones(shape, dtype=bool)        # subset DEM has no nodata
+    # The comparison method (module docstring) only holds if both sides see
+    # the same surface, including where it's missing data — verify that
+    # rather than assuming it, so a future subset DEM with real gaps can't
+    # silently get counted as valid instead of excluded.
+    has_nodata = nodata is not None and bool(np.any(dem == nodata))
+    check(not has_nodata, "subset DEM has no nodata cells",
+          f"{int((dem == nodata).sum()):,} cells" if has_nodata else "")
+    valid = (dem != nodata) if has_nodata else np.ones(shape, dtype=bool)
 
     print("\nENGINE RUNS + METRICS")
     rows, primary_masks = [], None
@@ -179,7 +215,7 @@ def main():
             eye = (x, y, float(scene.surface_z(x, y)[0]) + h)
             m = compute_viewshed(scene, eye, X, Y, Z, shape)
             masks.append(m == 1)
-        for i in range(3):
+        for i in range(n_obs):
             r = metrics_row(i + 1, h, base_masks[i], masks[i], valid)
             rows.append(r)
             print(f"  h={h:>4} obs{i+1}: agree {r['agreement_pct']:.1f}%  "
@@ -200,7 +236,7 @@ def main():
     bd_kw = dict(cmap=None if backdrop.ndim == 3 else "gray")
     h0 = args.eye_heights[0]
 
-    for i in range(3):
+    for i in range(n_obs):
         A, B = base_masks[i], primary_masks[i]
         fig, axes = plt.subplots(1, 3, figsize=(18, 8), dpi=200)
         panels = [("r.viewshed baseline", overlay_rgba(A, valid, [1, .85, 0, .8])),
@@ -233,7 +269,10 @@ def main():
         print(f"  wrote compare_obs{i+1}.png")
 
     old = [binarize_baseline(args.baseline_dir / f"viewshed_mark{i}_old.tif")[0]
-           for i in (1, 2, 3)]
+           for i in range(1, n_obs + 1)]
+    # This figure's 3-panel layout (and the axes[2] legend placement below)
+    # is a fixed design choice, not a re-derivation of n_obs; it assumes
+    # exactly 3 observers, same as the check above.
     fig, axes = plt.subplots(1, 3, figsize=(18, 8), dpi=200)
     for i, ax in enumerate(axes):
         ax.imshow(backdrop, **bd_kw)
@@ -267,7 +306,7 @@ def main():
     write_report(args.out_dir, df, args.eye_heights)
 
     print("\n" + "=" * 70)
-    for i in range(3):
+    for i in range(n_obs):
         ag = df[(df.observer == i + 1) & (df.eye_height_m == h0)].iloc[0].agreement_pct
         if ag < 70:
             warn(f"obs{i+1} agreement low at {h0} m",

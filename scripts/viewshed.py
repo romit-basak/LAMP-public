@@ -45,6 +45,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import numpy as np
 import pandas as pd
 import rasterio
@@ -56,6 +57,9 @@ from shapely.geometry import LineString
 from sanity_checks import (ROOT, DEM_REGEN, FOOTPRINTS, VIEWPOINTS,
                            DOME_INVENTORY, check, warn, failures)
 from build_dem_with_buildings import hillshade, core_window
+from volume_mesh import (fill_nan_nearest, blocky_mesh, smooth_mesh,
+                         index_to_world, run_mesh_checks, write_mesh_ply,
+                         write_ply, write_las)
 
 EYE_HEIGHT = 1.5          # default eye height (m) above surface; late-antique
                           # skeletal baseline, override with --eye-height
@@ -219,11 +223,145 @@ class HeightfieldScene:
                 running = torch.maximum(running, ang)
 
             # Visible iff the target rises to or above the horizon accumulated
-            # along its bearing.
+            # along its bearing. Order matters: the near-cell override (OR)
+            # must apply first so an adjacent nodata-free cell isn't lost to
+            # rounding, and the nodata veto (AND) must apply last so it can
+            # still exclude a target even when it happens to sit near-cell.
             vis = (ang_t_t >= running - self.eps_ang).cpu().numpy()
             vis |= near                      # target == observer cell
             vis &= np.isfinite(ang_t)        # tz nodata -> not visible
             out[s:s + chunk] = vis
+        return out
+
+    def first_hit(self, eye_xyz, ux, uy, slope, max_range=None,
+                  chunk=200_000):
+        """First surface intersection along rays leaving the eye. `ux`/`uy`
+        are per-ray horizontal unit directions (world east/north), `slope`
+        the rise-over-run (tan of the elevation angle). Returns a float64
+        numpy array [N] of *horizontal* distance to the hit; np.inf where
+        the ray escapes (sky, off the DEM, or beyond max_range).
+
+        Same march as visible_mask, but the rays have no endpoint: instead
+        of folding a running-max horizon toward a known target it records
+        the first step where the surface rises to the ray line — the depth
+        query behind the first-person renders (scripts/observer_view.py).
+        The eye-anchor and bilinear-gather idioms are duplicated from
+        visible_mask on purpose: that kernel is the one validated against
+        GRASS r.viewshed, so it stays byte-identical rather than growing a
+        shared helper both would then depend on."""
+        ex, ey, ez = (float(v) for v in eye_xyz)
+        ux = np.asarray(ux, dtype=np.float64).ravel()
+        uy = np.asarray(uy, dtype=np.float64).ravel()
+        slope = np.asarray(slope, dtype=np.float64).ravel()
+        n = len(ux)
+        out = np.full(n, np.inf)
+
+        col_eye, row_eye = self._pix(ex, ey)
+        ci, ri = int(round(col_eye)), int(round(row_eye))
+        cf, rf = col_eye - ci, row_eye - ri
+
+        # f(d) = surface - ray line; its sign change brackets the hit. At
+        # d = 0 the ray sits eye-height above the ground, so f starts
+        # negative (fallback -1 when the eye is off the DEM / on nodata).
+        f0 = float(self.surface_z(ex, ey)[0]) - ez
+        if not np.isfinite(f0) or f0 >= 0:
+            f0 = -1.0
+
+        # Per-ray march ceilings, host-side in float64. d_exit: where the
+        # ray leaves the DEM bounding box (every later sample is invalid,
+        # so marching on is pure waste). d_ceil: an upward ray that has
+        # climbed above the DEM's global max can never meet the surface
+        # again. Together these retire sky rays after a few hundred steps
+        # instead of the full box diagonal (~13k steps at 0.2 m).
+        x_lo, x_hi = self.x0, self.x0 + self.W * self.a
+        y_a, y_b = self.y0, self.y0 + self.H * self.e
+        y_lo, y_hi = min(y_a, y_b), max(y_a, y_b)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t_x = np.where(ux > 0, (x_hi - ex) / ux,
+                           np.where(ux < 0, (x_lo - ex) / ux, np.inf))
+            t_y = np.where(uy > 0, (y_hi - ey) / uy,
+                           np.where(uy < 0, (y_lo - ey) / uy, np.inf))
+        d_stop = np.clip(np.minimum(t_x, t_y), 0.0, None)
+        # This project's nodata sentinel is a huge negative number (see
+        # CLAUDE.md), so a plain .max() already ignores it in the normal
+        # case. The explicit re-derive below only matters if the whole
+        # array were nodata (then .max() *is* the sentinel) or a
+        # differently-signed DEM were ever loaded here.
+        zmax = float(self.dem_np.max())
+        if self.nodata is not None and zmax == self.nodata:
+            zmax = float(self.dem_np[self.dem_np != self.nodata].max())
+        with np.errstate(divide="ignore", invalid="ignore"):
+            d_ceil = np.where(slope > 0,
+                              np.maximum(zmax - ez, 0.0) / slope, np.inf)
+        d_stop = np.minimum(d_stop, d_ceil)
+        if max_range is not None:
+            d_stop = np.minimum(d_stop, max_range)
+
+        for s in range(0, n, chunk):
+            stopc = d_stop[s:s + chunk]
+            m = len(stopc)
+
+            t = lambda arr: torch.as_tensor(  # noqa: E731
+                arr, dtype=torch.float32, device=self.device)
+            ucol = t(ux[s:s + chunk] / self.a)
+            urow = t(uy[s:s + chunk] / self.e)
+            slope_t = t(slope[s:s + chunk])
+            stop_t = t(stopc)
+            hit = torch.full((m,), math.inf, device=self.device)
+            prev_f = torch.full((m,), f0, device=self.device)
+            d_prev = 0.0
+
+            d_far = float(stopc.max()) if m else 0.0
+            k_max = int(math.ceil(d_far / self.step)) + 1
+            for k in range(1, k_max):
+                d_k = k * self.step
+                if d_k < self.d_min:
+                    continue
+                active = torch.isinf(hit) & (stop_t >= d_k)
+                if not bool(active.any()):
+                    break
+                rel_col = cf + ucol * d_k
+                rel_row = rf + urow * d_k
+                fc = torch.floor(rel_col)
+                fr = torch.floor(rel_row)
+                wc = rel_col - fc
+                wr = rel_row - fr
+                c0 = ci + fc.to(torch.long)
+                r0 = ri + fr.to(torch.long)
+                inb = (c0 >= 0) & (c0 < self.W - 1) & (r0 >= 0) & (r0 < self.H - 1)
+                c0c = c0.clamp(0, self.W - 2)
+                r0c = r0.clamp(0, self.H - 2)
+                base = r0c * self.W + c0c
+                z00 = self.dem_flat[base]
+                z01 = self.dem_flat[base + 1]
+                z10 = self.dem_flat[base + self.W]
+                z11 = self.dem_flat[base + self.W + 1]
+                valid = inb & active
+                if self.nodata is not None:
+                    nod = ((z00 == self.nodata) | (z01 == self.nodata) |
+                           (z10 == self.nodata) | (z11 == self.nodata))
+                    valid &= ~nod
+                top = z00 * (1 - wc) + z01 * wc
+                bot = z10 * (1 - wc) + z11 * wc
+                z = top * (1 - wr) + bot * wr
+                # Signed clearance surface-minus-ray; >= 0 means the ray
+                # line has met the terrain at this step. A linear root
+                # between the last clear sample and this one removes the
+                # 0.2 m step-quantization banding from depth images.
+                # d_prev is the previous *evaluated* step (0 before the
+                # first); after a nodata gap prev_f can be a step or two
+                # stale — a sub-step refinement error, accepted.
+                f = z - (ez + slope_t * d_k)
+                new_hit = valid & (f >= 0)
+                denom = prev_f - f
+                tfrac = torch.where(denom.abs() > 1e-9, prev_f / denom,
+                                    torch.ones_like(f))
+                tfrac = tfrac.clamp(0.0, 1.0)
+                d_interp = d_prev + tfrac * (d_k - d_prev)
+                hit = torch.where(new_hit, d_interp, hit)
+                prev_f = torch.where(valid, f, prev_f)
+                d_prev = d_k
+            out[s:s + chunk] = hit.cpu().numpy().astype(np.float64)
         return out
 
     def is_visible(self, eye_xyz, target_xyz):
@@ -540,21 +678,6 @@ def write_volume_csv(path, pts, count=None):
     pd.DataFrame(data, columns=cols).to_csv(path, index=False)
 
 
-def write_volume_ply(path, pts, count=None):
-    header = ["ply", "format ascii 1.0", f"element vertex {len(pts)}",
-              "property float x", "property float y", "property float z"]
-    if count is not None:
-        header.append("property int count")
-    header.append("end_header")
-    with open(path, "w") as f:
-        f.write("\n".join(header) + "\n")
-        if count is None:
-            np.savetxt(f, pts, fmt="%.3f")
-        else:
-            np.savetxt(f, np.column_stack([pts, count]),
-                       fmt=["%.3f", "%.3f", "%.3f", "%d"])
-
-
 def write_volume_npy(path, vis, xs, ys, levels, crs):
     """Boolean/int voxel grid (rows->ys, cols->xs, depth->levels) + a JSON
     sidecar carrying the georeferencing needed to rebuild world coords."""
@@ -572,30 +695,68 @@ def write_volume_npy(path, vis, xs, ys, levels, crs):
         json.dump(meta, f, indent=2)
 
 
-def write_volume_las(path, pts, crs, count=None):
-    """Visible voxel centers as a LAS/LAZ point cloud (.las/.laz chosen by the
-    path suffix). `count` (combined volume) is stored as intensity. The CRS is
-    written into the header so QGIS georeferences it. Requires laspy, plus the
-    lazrs backend for .laz; missing deps are reported, not raised."""
-    try:
-        import laspy
-        from pyproj import CRS as PyCRS
-    except ImportError as exc:
-        warn("LAS/LAZ skipped", f"install laspy (+lazrs for .laz): {exc}")
+def write_volume_mesh(path, vis, xs, ys, levels, ground, voxel, zstep,
+                      style, crs, title):
+    """Boundary surface of the visible-voxel set as an ASCII PLY
+    triangle mesh (+ a 3D QC PNG alongside). Vertices ride the local
+    ground (levels are heights AGL), so the mesh is the volume's true
+    3D shape rather than an abstract voxel stack. Styles: blocky =
+    exact voxel boundary; smooth = marching-cubes isosurface (see
+    volume_mesh.py for the trade-off)."""
+    path = Path(path)
+    nvis = int(vis.sum())
+    if nvis == 0:
+        warn("volume mesh skipped", f"no visible voxels for {path.name}")
         return
-    if len(pts) == 0:
-        warn("LAS/LAZ skipped", f"no visible points for {Path(path).name}")
+    gf = fill_nan_nearest(np.asarray(ground, dtype=np.float64))
+    verts, faces = (blocky_mesh(vis) if style == "blocky"
+                    else smooth_mesh(vis))
+    if verts is None:              # scikit-image missing (already checked)
         return
-    header = laspy.LasHeader(point_format=3, version="1.4")
-    header.offsets = pts.min(axis=0)
-    header.scales = [0.001, 0.001, 0.001]   # mm precision on large UTM coords
-    if crs is not None:
-        header.add_crs(PyCRS.from_user_input(str(crs)))
-    las = laspy.LasData(header)
-    las.x, las.y, las.z = pts[:, 0], pts[:, 1], pts[:, 2]
-    if count is not None:
-        las.intensity = np.asarray(count, dtype=np.uint16)
-    las.write(str(path))
+    verts, faces = index_to_world(verts, faces, float(xs[0]), voxel,
+                                  float(ys[0]), -voxel,
+                                  float(levels[0]), zstep, ground=gf)
+    bounds = (float(xs[0]), float(xs[-1]), float(ys[-1]), float(ys[0]),
+              float(gf.min()) + float(levels[0]),
+              float(gf.max()) + float(levels[-1]))
+    vol = run_mesh_checks(verts, faces, nvis, voxel * voxel * zstep,
+                          bounds, (voxel, voxel, zstep), style)
+    if len(faces) > 2_000_000:
+        warn("very large mesh",
+             f"{len(faces):,} faces — raise --voxel/--zstep")
+    write_mesh_ply(path, verts, faces,
+                   comment=f"style={style} voxel={voxel:g} zstep={zstep:g} "
+                           f"nvis={nvis} crs={crs}")
+    mesh_qc_png(path.with_name(path.stem + "_qc.png"), verts, faces, title)
+    print(f"  mesh ({style}): {len(verts):,} verts, {len(faces):,} faces, "
+          f"{vol:,.1f} m^3 -> {path.name}")
+
+
+def mesh_qc_png(path, verts, faces, title, max_faces=150_000):
+    """Oblique 3D glance at the volume mesh (face-subsampled when
+    huge). A sanity look only — the real audit is opening the PLY in
+    CloudCompare/Blender on top of the voxel point cloud."""
+    f = faces
+    if len(f) > max_faces:
+        rng = np.random.default_rng(0)
+        f = f[rng.choice(len(f), max_faces, replace=False)]
+    tris = verts[f]
+    zc = tris[:, :, 2].mean(axis=1)
+    rel = (zc - zc.min()) / max(float(zc.max() - zc.min()), 1e-9)
+    fig = plt.figure(figsize=(10, 8), dpi=150)
+    ax = fig.add_subplot(projection="3d")
+    ax.add_collection3d(Poly3DCollection(
+        tris, facecolors=plt.get_cmap("viridis")(rel), edgecolors="none"))
+    lo, hi = verts.min(axis=0), verts.max(axis=0)
+    ax.set_xlim(lo[0], hi[0])
+    ax.set_ylim(lo[1], hi[1])
+    ax.set_zlim(lo[2], hi[2])
+    ax.set_box_aspect(hi - lo)
+    ax.view_init(elev=35, azim=-60)
+    ax.set_title(title)
+    ax.axis("off")
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
 
 
 def volume_qc_png(xs, ys, levels, ground, vis, footprints, eye_xy, title, path):
@@ -673,14 +834,21 @@ def run_self_checks(scene, eyes, masks, obs, X, Y, eye_height=EYE_HEIGHT):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--dem", type=Path, default=DEM_REGEN)
-    p.add_argument("--footprints", type=Path, default=FOOTPRINTS)
-    p.add_argument("--observers", type=Path, default=VIEWPOINTS)
+    p.add_argument("--dem", type=Path, default=DEM_REGEN,
+                   help="ray-casting surface (DEM-with-buildings heightfield)")
+    p.add_argument("--footprints", type=Path, default=FOOTPRINTS,
+                   help="building footprints (graph edges, QC overlays)")
+    p.add_argument("--observers", type=Path, default=VIEWPOINTS,
+                   help="observer point file")
     p.add_argument("--out-dir", type=Path,
-                   default=ROOT / "200_Projects/220_BuildingsToDEM")
+                   default=ROOT / "200_Projects/220_BuildingsToDEM",
+                   help="output directory for rasters/graph/volume/QC")
     p.add_argument("--margin", type=float, default=60.0,
                    help="core-window margin (m); ignored when --radius is set")
-    p.add_argument("--chunk", type=int, default=200_000)
+    p.add_argument("--chunk", type=int, default=200_000,
+                   help="ray-batch size for the --volume sampler only (memory "
+                        "guard); the per-observer raster pass always uses "
+                        "visible_mask's own default regardless of this flag")
     p.add_argument("--eye-height", type=float, default=EYE_HEIGHT,
                    help=f"observer eye height (m) above surface "
                         f"(default {EYE_HEIGHT:g})")
@@ -719,10 +887,18 @@ def main():
                    help="sample the volume at native DEM resolution "
                         "(voxel = zstep = pixel size); can be very large")
     p.add_argument("--volume-format", nargs="+", default=["csv"],
-                   choices=["csv", "ply", "npy", "las", "laz", "all"],
+                   choices=["csv", "ply", "npy", "las", "laz", "mesh", "all"],
                    help="volume output format(s); default csv. las/laz are "
                         "point clouds for QGIS/CloudCompare (need laspy); "
-                        "'all' = csv,ply,npy")
+                        "mesh = the volume's boundary surface as a PLY "
+                        "triangle mesh (see --mesh-style); 'all' = csv,ply,npy")
+    p.add_argument("--mesh-style", choices=["blocky", "smooth"],
+                   default="blocky",
+                   help="volume mesh style (with --volume-format mesh): "
+                        "blocky = exact voxel boundary (auditable; the mesh "
+                        "encloses identically n_voxels x voxel volume); "
+                        "smooth = marching-cubes isosurface (presentation; "
+                        "needs scikit-image)")
     p.add_argument("--domes", action="store_true",
                    help="bake dome caps into the ray-casting surface before "
                         "analysis (off by default; needs dome_inventory.csv "
@@ -886,13 +1062,18 @@ def main():
             if "csv" in formats:
                 write_volume_csv(stem.with_suffix(".csv"), pts)
             if "ply" in formats:
-                write_volume_ply(stem.with_suffix(".ply"), pts)
+                write_ply(stem.with_suffix(".ply"), pts)
             if "npy" in formats:
                 write_volume_npy(stem.with_suffix(".npy"), vis, xs, ys, levels, crs)
             if "las" in formats:
-                write_volume_las(stem.with_suffix(".las"), pts, crs)
+                write_las(stem.with_suffix(".las"), pts, crs)
             if "laz" in formats:
-                write_volume_las(stem.with_suffix(".laz"), pts, crs)
+                write_las(stem.with_suffix(".laz"), pts, crs)
+            if "mesh" in formats:
+                write_volume_mesh(stem.parent / f"{stem.name}_mesh.ply",
+                                  vis, xs, ys, levels, ground, voxel,
+                                  zstep, args.mesh_style, crs,
+                                  f"Volume mesh — point {label}{sect_txt}")
             volume_qc_png(xs, ys, levels, ground, vis, footprints, eye[:2],
                           f"Volume — point {label}{sect_txt}",
                           stem.with_suffix(".png"))
@@ -911,13 +1092,21 @@ def main():
             if "csv" in formats:
                 write_volume_csv(stem.with_suffix(".csv"), pts, cvals)
             if "ply" in formats:
-                write_volume_ply(stem.with_suffix(".ply"), pts, cvals)
+                write_ply(stem.with_suffix(".ply"), pts, cvals)
             if "npy" in formats:
                 write_volume_npy(stem.with_suffix(".npy"), count, xs, ys, levels, crs)
             if "las" in formats:
-                write_volume_las(stem.with_suffix(".las"), pts, crs, cvals)
+                write_las(stem.with_suffix(".las"), pts, crs, cvals)
             if "laz" in formats:
-                write_volume_las(stem.with_suffix(".laz"), pts, crs, cvals)
+                write_las(stem.with_suffix(".laz"), pts, crs, cvals)
+            if "mesh" in formats:
+                # Union shape only (count > 0): per-voxel observer
+                # counts have no boundary-surface representation — they
+                # stay in the csv/las outputs.
+                write_volume_mesh(stem.parent / f"{stem.name}_mesh.ply",
+                                  cvis, xs, ys, levels, ground, voxel,
+                                  zstep, args.mesh_style, crs,
+                                  "Volume mesh — combined (any observer)")
             print(f"  combined: {int(cvis.sum()):,} voxels visible to "
                   f"≥1 observer")
 

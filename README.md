@@ -15,8 +15,9 @@ uv pip install --python .venv -r requirements.txt
 
 Local environment: Apple Silicon Mac (MPS). Heavy ray-casting and the SAR
 imagery subset live on a remote CUDA machine. All compute code is
-device-agnostic (CUDA → MPS → CPU) — see CLAUDE.md's Environment section for
-the full convention. The local data subset lives in `LAMP_DataStore/ElBagawat/`.
+device-agnostic (CUDA → MPS → CPU). The local data subset lives in `LAMP_DataStore/ElBagawat/`.
+For a from-scratch clone-to-running-pipeline walkthrough on the remote
+machine, see [docs/REMOTE_SETUP.md](docs/REMOTE_SETUP.md).
 
 ## Pipeline at a glance
 
@@ -32,8 +33,15 @@ build_dome_layer.py         (optional) typology + orthophoto → dome_inventory.
     viewshed.py              cast rays, write viewsheds / visibility graph / 3D volume
         │                    (--domes bakes dome_inventory.csv into the ray-cast
         │                     surface in-memory, opt-in, experimental)
+        ├── observer_view.py     first-person snapshots of what each observer sees
+        │                        (same ray-march kernel; pano + perspective PNGs)
         ├── volume_convert.py    (optional) volume CSV → PLY / NPY / GeoTIFF / LAS / LAZ
         └── compare_baseline.py  validate against the GRASS r.viewshed baseline
+
+export_scene_bundle.py      (optional) DEM window + ortho + observers + domes →
+        │                   scene_bundle/ in a local float32-safe frame
+        └── blender/build_bagawat_scene.py   Cycles renders (docs/BLENDER.md);
+                                             Unity Terrain import (docs/UNITY.md)
 ```
 
 Run `sanity_checks.py` before anything else, and after pulling new data.
@@ -144,7 +152,8 @@ always omnidirectional)
 | `--zmax` | `30.0` | Highest sample height above ground (m) |
 | `--zstep` | `2.0` | Volume vertical spacing (m) |
 | `--volume-fullres` | off | Sample at native DEM resolution (voxel = zstep = pixel size); can be very large |
-| `--volume-format` | `csv` | Any of `csv ply npy las laz` or `all` (= csv,ply,npy). `las`/`laz` need `laspy` (+`lazrs` for `.laz`) |
+| `--volume-format` | `csv` | Any of `csv ply npy las laz mesh` or `all` (= csv,ply,npy). `las`/`laz` need `laspy` (+`lazrs` for `.laz`); `mesh` writes the volume's **boundary surface** as a PLY triangle mesh (faces + edges, terrain-following) instead of voxel points, plus a 3D QC PNG |
+| `--mesh-style` | `blocky` | With `mesh`: `blocky` = exact voxel boundary (auditable — the mesh encloses identically n_voxels × voxel volume, self-checked); `smooth` = marching-cubes isosurface (presentation). Combined volume is meshed as the union (any-observer) shape; per-voxel counts stay in csv/las |
 
 **Domes** (experimental — see [CLAUDE.md](CLAUDE.md) Conventions)
 
@@ -175,6 +184,46 @@ always omnidirectional)
 .venv/bin/python scripts/viewshed.py --observers my_points.shp --ids 80 180 181
 ```
 
+### `scripts/observer_view.py` — first-person snapshots
+
+Renders what each observer actually sees: equirectangular panoramas and
+pinhole perspective views, ray-marched by the **same kernel** the viewshed
+products use (`HeightfieldScene.first_hit`), so the images are audit-grade —
+every pixel that shows surface is a point the viewshed calls visible. Other
+observers appear as markers (filled green = visible per the viewgraph LOS
+test, hollow red = occluded).
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--dem` / `--footprints` / `--observers` / `--ids` / `--point` / `--eye-height` / `--chunk` | as `viewshed.py` | Same semantics |
+| `--out-dir` | `220_BuildingsToDEM/observer_views/` | Where the PNGs land |
+| `--azimuth` | none (full 360°) | Pano center, compass degrees |
+| `--fov` | `360` | Pano horizontal span (with `--azimuth`) |
+| `--pitch` | `0` | View-center elevation angle |
+| `--vfov` | `40` | Pano vertical span — the image's angular height (**not** viewshed.py's cone filter; 180 there = unconstrained) |
+| `--pano-width` | `1440` | Pano width in px (0.25°/px at 360°) |
+| `--no-pano` | off | Skip the panorama |
+| `--persp AZ …` | none | Pinhole perspective view(s) at these azimuths |
+| `--persp-fov` / `--persp-size` | `60` / `720 480` | Perspective fov / image size |
+| `--modes` | `natural depth ids` | Shadings: sand-lit + ortho drape + fog / log-scaled slant range / footprint-ID colors |
+| `--ortho` / `--no-ortho` | 0.4 m orthophoto | Drape texture for natural mode |
+| `--fog` | `300` | Fog length (m) in natural mode; `0` = off |
+| `--max-range` | none (DEM edge) | Stop rays at this distance |
+| `--step-scale` | `1.0` | March-step multiplier; >1 fast but can leak through thin walls |
+| `--no-markers` | off | Skip other-observer markers |
+| `--domes` / `--dome-inventory` | off | Bake dome caps into the surface first |
+
+```bash
+# all observers, full 360° pano, all three shadings
+.venv/bin/python scripts/observer_view.py
+# one observer, eastward perspective only
+.venv/bin/python scripts/observer_view.py --ids 1 --persp 90 --no-pano
+```
+
+Self-checks include a cross-validation: sampled first-hit points must be
+visible to `visible_mask` (the r.viewshed-validated kernel) — runs at
+99.6–100% in practice.
+
 ### `scripts/volume_convert.py`
 
 Promotes a saved `--volume` CSV into other formats without recomputing the
@@ -183,11 +232,17 @@ ray-casting.
 | Flag | Default | Meaning |
 |---|---|---|
 | `csv` (positional) | — | Volume CSV from `viewshed.py` |
-| `--to` | required | Any of `ply npy tif las laz` |
+| `--to` | required | Any of `ply npy tif las laz mesh` |
 | `--out-stem` | input filename stem | Output path stem |
-| `--voxel` | inferred from data | Horizontal spacing (m), for `npy`/`tif` |
-| `--zstep` | inferred from data | Vertical spacing (m), for `npy`/`tif` |
+| `--voxel` | inferred from data | Horizontal spacing (m), for `npy`/`tif`/`mesh` |
+| `--zstep` | `1.0` if omitted | Vertical **bin size** (m), for `npy`/`tif`/`mesh` — unlike `--voxel` this is never inferred (the CSV's z values are absolute elevations, not a clean lattice) |
 | `--crs` | none | CRS for the npy sidecar / GeoTIFF / LAS (e.g. `EPSG:32636`) |
+| `--mesh-style` | `blocky` | With `--to mesh`: `blocky` exact voxel boundary / `smooth` marching cubes |
+
+Caveat on `--to mesh`: the CSV's z is absolute and gets re-binned at
+`--zstep`, so this mesh is a staircase approximation; the faithful
+terrain-following shape comes from `viewshed.py --volume-format mesh`
+(this path exists for only-kept-the-CSV workflows).
 
 ```bash
 .venv/bin/python scripts/volume_convert.py viewshed_volume_id7.csv --to ply
@@ -213,6 +268,44 @@ Validates the engine against the user's GRASS `r.viewshed` baseline
 ```bash
 .venv/bin/python scripts/compare_baseline.py
 ```
+
+### `scripts/export_scene_bundle.py` — Blender/Unity export
+
+Writes `scene_bundle/`: heightmap, ortho drape texture, observer eye
+positions and dome geometry, all shifted to a **local whole-meter origin**
+(raw UTM coords overflow the float32 both engines use). Domes are exported
+as geometry, never baked into the heightmap.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--dem` / `--footprints` / `--observers` / `--ids` / `--eye-height` / `--dome-inventory` | as `viewshed.py` | Same semantics |
+| `--margin` | `60` | Window margin (m) around the footprint bounds |
+| `--full` | off | Export the whole DEM instead of the core window |
+| `--unity` | off | Also write a 16-bit RAW heightmap for Unity Terrain |
+| `--unity-res` | `1025` | Unity heightmap resolution, (2^n)+1 |
+| `--out-dir` | `220_BuildingsToDEM/scene_bundle/` | Bundle folder |
+
+```bash
+.venv/bin/python scripts/export_scene_bundle.py --unity
+```
+
+### `blender/build_bagawat_scene.py` — Cycles renders
+
+Runs inside Blender's own Python (no repo imports); consumes the bundle.
+Install Blender 4.x LTS, then:
+
+```bash
+blender -b -P blender/build_bagawat_scene.py -- \
+    --bundle LAMP_DataStore/ElBagawat/200_Projects/220_BuildingsToDEM/scene_bundle \
+    --camera id1 --azimuth 90 --domes
+```
+
+Flags: `--camera` (default all) · `--azimuth` (default 90, repeatable) ·
+`--pitch` · `--fov 60` · `--size 720 480` · `--samples 64` · `--stride`
+(draft decimation) · `--domes` · `--height-ramp` · `--overview` ·
+`--save-blend` · `--no-render` · `--render-dir`. Full setup, conventions,
+and the engine-vs-Blender cross-check: [docs/BLENDER.md](docs/BLENDER.md).
+Unity Terrain import: [docs/UNITY.md](docs/UNITY.md).
 
 ## Reproducing the QGIS scene on the remote machine
 

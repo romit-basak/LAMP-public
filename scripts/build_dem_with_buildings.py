@@ -57,12 +57,17 @@ def core_window(total_bounds, transform, margin=60.0):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--base-dem", type=Path, default=DEM_BASE_04)
-    p.add_argument("--footprints", type=Path, default=FOOTPRINTS)
-    p.add_argument("--height-field", default="Elevation")
+    p.add_argument("--base-dem", type=Path, default=DEM_BASE_04,
+                   help="bare-earth DEM to extrude buildings onto")
+    p.add_argument("--footprints", type=Path, default=FOOTPRINTS,
+                   help="footprint polygons carrying the height field")
+    p.add_argument("--height-field", default="Elevation",
+                   help="footprint column holding building height (m)")
     p.add_argument("--out", type=Path,
                    default=ROOT / "200_Projects/220_BuildingsToDEM" /
-                   f"DEMWithBuildings-0.4m-{date.today():%Y%m%d}.tif")
+                   f"DEMWithBuildings-0.4m-{date.today():%Y%m%d}.tif",
+                   help="output raster path (default: date-stamped in "
+                        "220_BuildingsToDEM/)")
     p.add_argument("--all-touched", action="store_true",
                    help="burn every pixel touched by a footprint (dilates "
                         "thin features by up to one pixel)")
@@ -94,8 +99,8 @@ def main():
         gdf = gdf.drop(bad.index)
     print(f"  features: {len(gdf)}  height range "
           f"{gdf[args.height_field].min():.2f}–{gdf[args.height_field].max():.2f} m")
-    print(f"  Type counts: {gdf['Type'].value_counts(dropna=False).to_dict()}"
-          if "Type" in gdf.columns else "")
+    if "Type" in gdf.columns:
+        print(f"  Type counts: {gdf['Type'].value_counts(dropna=False).to_dict()}")
 
     n_invalid = int((~gdf.geometry.is_valid).sum())
     if n_invalid:
@@ -138,6 +143,11 @@ def main():
     print(f"  footprint pixels: {int(fp_mask.sum()):,} "
           f"({100 * fp_mask.mean():.2f}% of grid)")
 
+    # tiled=True: downstream scripts (viewshed.py's core-window crop,
+    # build_dome_layer.py's per-footprint ortho window reads) only read
+    # small windows out of this raster, and GeoTIFF can only do that
+    # efficiently against internal tiles, not a single strip. lzw is a
+    # lossless, no-downside compression for a float32 elevation grid.
     profile.update(dtype="float32", compress="lzw", tiled=True)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(args.out, "w", **profile) as dst:
