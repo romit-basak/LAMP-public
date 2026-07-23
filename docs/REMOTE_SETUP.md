@@ -12,7 +12,7 @@ conventions, see [CLAUDE.md](../CLAUDE.md).
 ```powershell
 git clone <this-repo-url> LAMP
 cd LAMP
-mklink /J LAMP_DataStore <path-to-datastore-root>
+New-Item -ItemType Junction -Path LAMP_DataStore -Target <path-to-datastore-root>
 
 uv python install 3.13
 uv venv --python 3.13 .venv
@@ -64,13 +64,15 @@ it in as a junction — the junction must resolve so that
 `LAMP_DataStore\ElBagawat\...` is a valid path:
 
 ```powershell
-mklink /J LAMP_DataStore D:\path\to\datastore-root
+New-Item -ItemType Junction -Path LAMP_DataStore -Target D:\path\to\datastore-root
 ```
 
-(This is the same junction trick README.md's "Reproducing the QGIS scene on
-the remote machine" section uses for `Task2.qgz` — it matters for every
-script here, not just QGIS.) Verify it resolved correctly before going
-further:
+(`mklink` is a `cmd.exe` built-in, not a PowerShell command, so it fails
+with "not recognized" if run directly in a PowerShell prompt —
+`New-Item -ItemType Junction` is the native equivalent. This is the same
+junction trick README.md's "Reproducing the QGIS scene on the remote
+machine" section uses for `Task2.qgz` — it matters for every script here,
+not just QGIS.) Verify it resolved correctly before going further:
 
 ```powershell
 dir LAMP_DataStore\ElBagawat\200_Projects\220_BuildingsToDEM
@@ -226,11 +228,17 @@ to this repo; both docs assume the bundle in step 7 above already exists.
 
 ## Troubleshooting
 
-- **`mklink` says "Access is denied."** Junctions (`/J`) don't need admin
-  rights the way symbolic links (`/D`) do, but the *target* path must exist
-  and be readable. Double-check the datastore root path and that you're not
-  accidentally trying to overwrite an existing `LAMP_DataStore` folder —
-  `mklink` will refuse if the link name already exists as a real directory.
+- **`mklink`/`New-Item -ItemType Junction` says "Access is denied."**
+  Junctions don't need admin rights the way symbolic links do, but the
+  *target* path must exist and be readable. Double-check the datastore root
+  path and that you're not accidentally trying to overwrite an existing
+  `LAMP_DataStore` folder — junction creation will refuse if the link name
+  already exists as a real directory.
+- **`mklink` is not recognized as a cmdlet.** `mklink` is a `cmd.exe`
+  built-in, not a PowerShell command or standalone `.exe`, so it can't be
+  found when run directly at a PowerShell prompt. Use
+  `New-Item -ItemType Junction -Path LAMP_DataStore -Target <path>` instead
+  (or prefix the original command with `cmd /c`).
 - **`torch.cuda.is_available()` is `False` despite `nvidia-smi` working.**
   Almost always means the CUDA-index install step got skipped or a plain
   `pip install torch` from a different step re-installed a CPU wheel over
