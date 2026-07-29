@@ -40,6 +40,17 @@ def fail(msg):
     sys.exit(1)
 
 
+def ensure_nodes(datablock):
+    """Turn on node-based shading, skipping the write if already on.
+
+    use_nodes is deprecated for removal in Blender 6.0 as nodes become
+    the only mode (default True); only touching it when still False
+    keeps this correct pre- and post-removal without a version check.
+    """
+    if not datablock.use_nodes:
+        datablock.use_nodes = True
+
+
 def euler_for(azimuth, pitch):
     """XYZ euler that aims an object's -Z axis (camera forward, sun
     beam) along compass `azimuth` at elevation `pitch`, +Y up-ish:
@@ -101,7 +112,7 @@ def build_terrain(hm, meta, stride):
 
 def terrain_material(bundle, meta, height_ramp):
     mat = bpy.data.materials.new("terrain_mat")
-    mat.use_nodes = True
+    ensure_nodes(mat)
     nodes = mat.node_tree.nodes
     links = mat.node_tree.links
     bsdf = nodes["Principled BSDF"]
@@ -214,7 +225,7 @@ def main():
         terrain_material(args.bundle, meta, args.height_ramp))
     if args.domes:
         dome_mat = bpy.data.materials.new("dome_mat")
-        dome_mat.use_nodes = True
+        ensure_nodes(dome_mat)
         bsdf = dome_mat.node_tree.nodes["Principled BSDF"]
         bsdf.inputs["Base Color"].default_value = (0.91, 0.83, 0.67, 1.0)
         bsdf.inputs["Roughness"].default_value = 0.9
@@ -228,7 +239,7 @@ def main():
     sc.collection.objects.link(sun)
 
     world = bpy.data.worlds.new("world")
-    world.use_nodes = True
+    ensure_nodes(world)
     bg = world.node_tree.nodes["Background"]
     bg.inputs[0].default_value = (0.55, 0.70, 0.90, 1.0)
     bg.inputs[1].default_value = 0.7

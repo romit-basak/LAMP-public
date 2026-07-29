@@ -19,8 +19,10 @@ replaces — the engine's own first-person snapshots:
   script runs inside Blender's own bundled Python (bpy + numpy +
   stdlib only).
 - The mesh builder needs Blender ≥ 3.6 (it relies on `loop_total`
-  being derived from `loop_start`). On 5.x the script prints benign
-  `use_nodes` DeprecationWarnings (property slated for removal in 6.0).
+  being derived from `loop_start`). `use_nodes` (deprecated for removal
+  in 6.0, since nodes become the only mode) is only set when still
+  `False`, via `ensure_nodes()` — silent on both current and future
+  Blender versions, no version check needed.
 
 ## Workflow
 
