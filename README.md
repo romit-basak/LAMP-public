@@ -46,6 +46,28 @@ export_scene_bundle.py      (optional) DEM window + ortho + observers + domes â†
 
 Run `sanity_checks.py` before anything else, and after pulling new data.
 
+## GUI runner (optional)
+
+For repeated runs where hand-typing a long multi-flag command gets
+error-prone, `scripts/run_gui.py` renders every script's own argparse
+flags as a browser form (defaults pre-filled, dropdowns for `choices`,
+checkboxes for on/off flags) and runs the resulting command as a
+subprocess, streaming output back to the page. It reads each script's
+flags straight from its `build_parser()` â€” nothing is hand-copied, so
+the form can't drift out of sync with `--help`. The CLI below remains
+the reference interface; this is a convenience wrapper around the
+exact same argv.
+
+```bash
+.venv/bin/python scripts/run_gui.py
+```
+
+Opens `http://127.0.0.1:8765/` (`--port` to change, `--no-browser` to
+skip auto-open). Covers every script below plus
+`blender/build_bagawat_scene.py` (has its own "Blender executable"
+field, since that one runs under Blender's bundled Python, not this
+venv's).
+
 ## Script reference
 
 ### `scripts/sanity_checks.py`

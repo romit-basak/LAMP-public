@@ -129,7 +129,7 @@ def overlay_rgba(mask, valid, color):
     return rgba
 
 
-def main():
+def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--baseline-dir", type=Path, default=TASK2,
                    help="directory holding the GRASS r.viewshed baseline "
@@ -156,7 +156,11 @@ def main():
                    help="eye heights (m) to sweep; the FIRST value is the "
                         "one used for every figure and the written engine_* "
                         "mask TIFFs, so its position in the list matters")
-    args = p.parse_args()
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
 
     device = select_device()
     args.out_dir.mkdir(parents=True, exist_ok=True)

@@ -135,7 +135,10 @@ lives outside the regular Python environment entirely (Blender ships its own
 Python interpreter — see §8).
 [sanity_checks.py](../scripts/sanity_checks.py) is the shared foundation —
 every other script imports its canonical asset paths and its `check` /
-`warn` / `failures` self-check vocabulary.
+`warn` / `failures` self-check vocabulary. A ninth script,
+[run_gui.py](../scripts/run_gui.py), isn't part of the pipeline itself — it's
+a browser-form wrapper around all eight of the others' command lines (see
+§9).
 
 ---
 
@@ -1168,7 +1171,97 @@ Neutral does not do.
 The bpy script imports nothing from the rest of this project (Blender ships
 its own separate Python interpreter), so `scripts/` stays usable without
 Blender installed, and the Blender script stays usable without the project's
-own Python environment.
+own Python environment. One exception, added for §9 below: `import bpy` is
+now wrapped in a `try/except ImportError` (falling back to `bpy = None`) so
+the module's `build_parser()` — argument parsing only, no Blender calls —
+can be imported from the plain repo venv too. Nothing that actually touches
+`bpy` runs unless the module is genuinely executing inside Blender.
+
+---
+
+## 9. `scripts/run_gui.py` — the browser form wrapper
+
+**What it does.** A stdlib-only local web server that turns every script's
+existing argparse flags into an HTML form — defaults pre-filled, `choices`
+as dropdowns, `store_true` flags as checkboxes — and runs the constructed
+command as a subprocess, streaming its output back to the page. Motivation:
+several scripts here (`viewshed.py` most of all, with ~25 flags) accumulate
+a long command line across repeated exploratory runs, and a single typo'd
+flag name fails silently-ish (an unhelpful argparse error) or, worse, is a
+valid-but-wrong flag that just runs with the wrong setting.
+
+**The one design decision that matters: no separate schema.** The tempting
+naive approach is a hand-written JSON/YAML file describing each script's
+fields for the GUI to render. That immediately creates the same
+"maintained twice" problem this project's own hygiene passes keep finding
+elsewhere (README's `--zstep` help text drifting from the code, `write_ply`
+duplicated between two scripts, `FLAT_TYPES` going dead) — the GUI's schema
+would silently go stale the next time someone adds or renames a CLI flag
+without remembering to update it separately. Instead, every one of the
+eight target scripts got a small mechanical refactor: the existing
+`p = argparse.ArgumentParser(...)` / `p.add_argument(...)` block (previously
+inline in `main()`) now lives in its own `build_parser()` function that
+returns `p` before anything parses or runs. `run_gui.py` imports each
+module and calls `build_parser()` directly, then walks `parser._actions`
+to read each flag's name, help text, default, type, and `choices` straight
+from the same object `argparse --help` itself reads. There is exactly one
+place flags are defined, for both interfaces.
+
+**Reading argparse internals (`_actions`, `_StoreTrueAction`,
+`_AppendAction`) instead of a public API.** argparse has no documented
+introspection API for "give me every flag as data" — `_actions` is the
+library's own internal implementation detail, technically private (leading
+underscore). This project accepts that fragility deliberately rather than
+hand-maintaining a schema: an argparse internal changing between Python
+versions is a risk that surfaces immediately and loudly (an `AttributeError`
+on GUI startup, not a silent mismatch), whereas a hand-copied schema drifting
+from the real flags fails silently — someone submits the form, gets output
+that quietly used a stale default. Loud-but-rare beats silent-but-common.
+
+**Building the actual argv, not a shell string.** Submitted form values are
+assembled into a Python list (`[sys.executable, script, "--flag", "value",
+...]`) and passed to `subprocess.Popen` with `shell=False` (the default) —
+never concatenated into a shell command string. This isn't a style
+preference: it's what keeps arbitrary browser-submitted text from ever being
+interpreted by a shell, which is the standard command-injection vector for
+exactly this kind of "form builds a command" tool.
+
+**One convention resolves every field uniformly: empty means "omit the
+flag."** Rather than separately tracking which flags are truly optional
+(`--radius`, default `None`, meaning "whole-DEM window") versus which have a
+"real" default (`--eye-height`, `1.5`), every field follows one rule: a
+blank/unchecked form field is left out of the constructed argv entirely, so
+the script's own `argparse` default applies — identical to what leaving that
+flag off a hand-typed command line does. Fields with a concrete default are
+simply pre-filled with it, so submitting them unchanged just passes the same
+value explicitly (harmless redundancy); fields whose default is `None` are
+left blank by default, so omitting them reproduces "unset" exactly. No
+special-casing needed per field.
+
+**Repeatable flags (`--point`, `action="append"`) get a textarea, one
+entry per line**, rather than trying to represent "repeat this flag N
+times" in a single text input — each non-blank line becomes its own
+`--point X Y` occurrence in the built command.
+
+**The Blender script needed one more accommodation.** Unlike the other
+seven scripts, `build_bagawat_scene.py` is meant to run under Blender's own
+bundled Python (`blender -b -P script.py -- args`), not this project's venv
+— and it `import bpy`s at module level, which fails immediately outside
+Blender. Introspecting its flags the same way as everything else would
+therefore crash on GUI startup. Fixed by wrapping that one import in
+`try/except ImportError` (§8 above) — the module becomes importable from
+the plain venv purely to read its parser, while every function that
+actually touches `bpy` still only runs when Blender itself executes the
+file. The GUI also prepends an extra, non-argparse "Blender executable"
+field for this one tool, since the command needs `blender -b -P ... --`
+rather than this venv's `python`.
+
+**A live command preview, computed server-side.** The page shows the exact
+command that will run, updated on every field edit — via a `/api/preview`
+endpoint that calls the *same* `build_command()` function `/api/run` uses,
+rather than re-implementing the argv-building logic in JavaScript. Two
+implementations of "how to build the command" drifting apart would be
+exactly the bug class this whole design was built to avoid.
 
 ---
 
@@ -1211,6 +1304,8 @@ pass, not live bugs.
 | `blender/build_bagawat_scene.py`, `euler_for` | `radians(90 + pitch)` and a negated azimuth | Converts this project's "0=horizontal, compass clockwise" convention into Blender's "0=straight down, counterclockwise" default | Every camera and the sun would aim in the wrong (often mirrored) direction |
 | `blender/build_bagawat_scene.py` | Resolves `--bundle`/`--render-dir` to absolute paths before any Blender call | A relative path's meaning depends on the current scene's save location, which a fresh unsaved scene doesn't have | Textures/renders could silently break if the scene is later saved or moved |
 | `blender/build_bagawat_scene.py` | Forces the "Khronos PBR Neutral" color view transform | Blender's newer default (AgX) visibly washed out this project's grayscale drape in real test renders | Renders would look duller/grayer than the source imagery actually is |
+| `blender/build_bagawat_scene.py` | `ensure_nodes()` checks `datablock.node_tree is None`, never reads/writes `use_nodes` directly unless still required | `use_nodes` is deprecated for removal in Blender 6.0 (nodes become the only mode); even *reading* it emits a `DeprecationWarning`, not just setting it | Warnings on every run today; an `AttributeError` once the property is actually removed |
+| `scripts/run_gui.py` | Reads each script's flags via `build_parser()` + argparse's private `_actions`, instead of a hand-written schema | One place defines each flag, for both the CLI and the GUI — a separate schema would drift the same way `--zstep`'s help text once did | The GUI could silently show/accept a flag that no longer matches what the script actually does |
 
 A handful of smaller, lower-stakes magic numbers exist too (a `1e-9`
 division-guard epsilon here, a `97`-element sampling stride there, a `0.1 m`

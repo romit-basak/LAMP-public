@@ -115,7 +115,7 @@ def export_unity_raw(hm, z_lo, z_hi, res, out):
     return u16.nbytes
 
 
-def main():
+def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dem", type=Path, default=DEM_REGEN)
     p.add_argument("--footprints", type=Path, default=FOOTPRINTS)
@@ -137,7 +137,11 @@ def main():
                    help="Unity heightmap resolution, (2^n)+1 (default 1025)")
     p.add_argument("--out-dir", type=Path,
                    default=ROOT / "200_Projects/220_BuildingsToDEM/scene_bundle")
-    args = p.parse_args()
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
 
     print("=" * 70)
     print(f"SCENE BUNDLE   DEM: {Path(args.dem).name}   "

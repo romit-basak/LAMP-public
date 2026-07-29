@@ -113,7 +113,7 @@ def write_tif_slices(grid, meta, crs, stem):
     return nz
 
 
-def main():
+def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("csv", type=Path, help="volume CSV from viewshed.py")
     p.add_argument("--to", nargs="+", required=True,
@@ -137,7 +137,11 @@ def main():
                         f"{Z_BIN:g} m")
     p.add_argument("--crs", default=None,
                    help="CRS for npy sidecar / GeoTIFF / LAS (e.g. EPSG:32636)")
-    args = p.parse_args()
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
 
     check(args.csv.exists(), "input CSV exists", str(args.csv))
     if failures:

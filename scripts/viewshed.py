@@ -832,7 +832,7 @@ def run_self_checks(scene, eyes, masks, obs, X, Y, eye_height=EYE_HEIGHT):
         check(fwd == rev, "forward/reverse LOS agree on a sample cell")
 
 
-def main():
+def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dem", type=Path, default=DEM_REGEN,
                    help="ray-casting surface (DEM-with-buildings heightfield)")
@@ -905,7 +905,11 @@ def main():
                         "from scripts/build_dome_layer.py)")
     p.add_argument("--dome-inventory", type=Path, default=DOME_INVENTORY,
                    help="dome inventory CSV to use with --domes")
-    args = p.parse_args()
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
 
     device = select_device()
     print("=" * 70)

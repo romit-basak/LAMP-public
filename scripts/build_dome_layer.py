@@ -159,7 +159,7 @@ def detect_dome(ortho, transform, geom):
     return cx, cy, radius
 
 
-def main():
+def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--footprints", type=Path, default=FOOTPRINTS,
                    help="building footprint polygons (carries the ID and "
@@ -180,7 +180,11 @@ def main():
     p.add_argument("--from-inventory", type=Path, default=None,
                    help="skip detection; rebuild gpkg/QC from an edited "
                         "dome_inventory.csv")
-    args = p.parse_args()
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
 
     print("=" * 70)
     print("DOME LAYER (typology + orthophoto)")

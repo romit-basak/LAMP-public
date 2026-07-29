@@ -27,7 +27,12 @@ import math
 import sys
 from pathlib import Path
 
-import bpy
+try:
+    import bpy
+except ImportError:
+    # Only build_parser() runs when this module is introspected from the
+    # plain repo venv (e.g. scripts/run_gui.py) instead of inside Blender.
+    bpy = None
 import numpy as np
 
 SAND_DARK = (0.45, 0.38, 0.28, 1.0)
@@ -160,8 +165,7 @@ def add_domes(domes, mat):
           "(lower half submerged in the roof)")
 
 
-def main():
-    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+def build_parser():
     p = argparse.ArgumentParser(description=__doc__, prog="build_bagawat_scene")
     p.add_argument("--bundle", type=Path, required=True,
                    help="scene_bundle folder from export_scene_bundle.py")
@@ -192,7 +196,12 @@ def main():
                    help="build the scene only (use with --save-blend)")
     p.add_argument("--save-blend", action="store_true",
                    help="save <bundle>/scene.blend for interactive work")
-    args = p.parse_args(argv)
+    return p
+
+
+def main():
+    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+    args = build_parser().parse_args(argv)
     # Absolutize before anything touches Blender: image paths loaded
     # relative to an *unsaved* blend resolve unpredictably, and saving
     # the scene would remap them into a broken chain of ../ segments.

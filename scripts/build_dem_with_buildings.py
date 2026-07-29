@@ -55,7 +55,7 @@ def core_window(total_bounds, transform, margin=60.0):
     return win, crop
 
 
-def main():
+def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--base-dem", type=Path, default=DEM_BASE_04,
                    help="bare-earth DEM to extrude buildings onto")
@@ -71,7 +71,11 @@ def main():
     p.add_argument("--all-touched", action="store_true",
                    help="burn every pixel touched by a footprint (dilates "
                         "thin features by up to one pixel)")
-    args = p.parse_args()
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
 
     print("=" * 70)
     print("INPUT VALIDATION")

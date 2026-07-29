@@ -403,7 +403,7 @@ def run_self_checks(scene, views):
             warn("hit/LOS agreement below 99.5%", f"{frac:.3%}")
 
 
-def main():
+def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dem", type=Path, default=DEM_REGEN)
     p.add_argument("--footprints", type=Path, default=FOOTPRINTS)
@@ -471,7 +471,11 @@ def main():
                         "(off by default; needs dome_inventory.csv)")
     p.add_argument("--dome-inventory", type=Path, default=DOME_INVENTORY,
                    help="dome inventory CSV to use with --domes")
-    args = p.parse_args()
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
 
     device = select_device()
     print("=" * 70)
