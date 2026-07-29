@@ -20,9 +20,11 @@ replaces — the engine's own first-person snapshots:
   stdlib only).
 - The mesh builder needs Blender ≥ 3.6 (it relies on `loop_total`
   being derived from `loop_start`). `use_nodes` (deprecated for removal
-  in 6.0, since nodes become the only mode) is only set when still
-  `False`, via `ensure_nodes()` — silent on both current and future
-  Blender versions, no version check needed.
+  in 6.0, since nodes become the only mode) is never read or written
+  directly — `ensure_nodes()` checks the plain `node_tree` property
+  instead and only falls back to setting `use_nodes` where that's
+  still required, so it's silent on both current and future Blender
+  versions with no version check needed.
 
 ## Workflow
 

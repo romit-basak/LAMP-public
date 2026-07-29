@@ -41,13 +41,13 @@ def fail(msg):
 
 
 def ensure_nodes(datablock):
-    """Turn on node-based shading, skipping the write if already on.
-
-    use_nodes is deprecated for removal in Blender 6.0 as nodes become
-    the only mode (default True); only touching it when still False
-    keeps this correct pre- and post-removal without a version check.
+    """Turn on node-based shading, without reading the deprecated
+    use_nodes toggle to decide (removal targeted for Blender 6.0, where
+    nodes are the only mode and node_tree already exists by default;
+    even reading use_nodes warns). node_tree is a plain, non-deprecated
+    property that is None exactly when nodes aren't set up yet.
     """
-    if not datablock.use_nodes:
+    if datablock.node_tree is None:
         datablock.use_nodes = True
 
 
