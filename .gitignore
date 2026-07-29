@@ -3,3 +3,5 @@ LAMP_DataStore
 *.qgz~
 *.tif
 !Task_2/*.tif
+__pycache__/
+*.pyc
