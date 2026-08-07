@@ -54,8 +54,9 @@ from rasterio.features import geometry_mask
 from rasterio.windows import Window, transform as window_transform
 from shapely.geometry import LineString
 
-from sanity_checks import (ROOT, DEM_REGEN, FOOTPRINTS, VIEWPOINTS,
-                           DOME_INVENTORY, check, warn, failures)
+from sanity_checks import (ROOT, DEM_REGEN, DEM_BASE_04, FOOTPRINTS,
+                           VIEWPOINTS, DOME_INVENTORY, check, warn,
+                           failures)
 from build_dem_with_buildings import hillshade, core_window
 from volume_mesh import (fill_nan_nearest, blocky_mesh, smooth_mesh,
                          index_to_world, run_mesh_checks, write_mesh_ply,
@@ -812,14 +813,22 @@ def run_self_checks(scene, eyes, masks, obs, X, Y, eye_height=EYE_HEIGHT):
     # 2. obs-obs symmetric (only when the graph was built)
     if obs is not None:
         check(bool((obs == obs.T).all()), "observer-observer matrix symmetric")
-    # 3. monotonic in eye height (check-only second run on a subsample)
-    sub = np.column_stack([X.ravel()[::97], Y.ravel()[::97],
-                           scene.surface_z(X.ravel()[::97], Y.ravel()[::97])])
-    lo = scene.visible_mask(eyes[0], sub).sum()
-    eye_hi = (eyes[0][0], eyes[0][1], eyes[0][2] + 1.0)
-    hi = scene.visible_mask(eye_hi, sub).sum()
-    check(hi >= lo, "raising the eye never reduces visible count",
-          f"1.5 m: {lo}  +1 m: {hi}")
+    # 3. monotonic in eye height (check-only second run on a subsample).
+    #    A heightfield theorem only: with mesh apertures, raising the eye
+    #    above a door head can legitimately *lose* the through-the-door
+    #    cells, so the check is skipped for hybrid scenes.
+    if getattr(scene, "has_mesh", False):
+        warn("eye-height monotonicity check skipped",
+             "not a theorem once apertures exist")
+    else:
+        sub = np.column_stack([X.ravel()[::97], Y.ravel()[::97],
+                               scene.surface_z(X.ravel()[::97],
+                                               Y.ravel()[::97])])
+        lo = scene.visible_mask(eyes[0], sub).sum()
+        eye_hi = (eyes[0][0], eyes[0][1], eyes[0][2] + 1.0)
+        hi = scene.visible_mask(eye_hi, sub).sum()
+        check(hi >= lo, "raising the eye never reduces visible count",
+              f"1.5 m: {lo}  +1 m: {hi}")
     # 4. reciprocity spot-check on a visible cell
     vis_idx = np.argwhere(masks[0] == 1)
     if len(vis_idx):
@@ -905,6 +914,16 @@ def build_parser():
                         "from scripts/build_dome_layer.py)")
     p.add_argument("--dome-inventory", type=Path, default=DOME_INVENTORY,
                    help="dome inventory CSV to use with --domes")
+    p.add_argument("--mesh", type=Path, nargs="+",
+                   help="OBJ mesh(es) added as explicit 3D occluders — "
+                        "aperture-capable buildings rays can pass through "
+                        "(scripts/scene3d.py hybrid scene)")
+    p.add_argument("--mesh-clear-ids", type=int, nargs="+",
+                   help="with --mesh: footprint IDs whose extruded blocks "
+                        "are flattened back to the bare-earth DEM so the "
+                        "mesh version doesn't double-occlude")
+    p.add_argument("--bare-dem", type=Path, default=DEM_BASE_04,
+                   help="bare-earth DEM sampled by --mesh-clear-ids")
     return p
 
 
@@ -928,7 +947,31 @@ def main():
         dem, n_domes, n_cells = apply_dome_overlay(
             dem, transform, nodata, args.dome_inventory, footprints)
         print(f"  domes: {n_domes} chapels overlaid, {n_cells:,} cells raised")
+    if args.mesh and args.mesh_clear_ids:
+        # Imported lazily so runs without --mesh keep today's startup
+        # and never touch the hybrid path at all. Flattening happens
+        # last (after --domes) so a mesh building is removed from the
+        # heightfield in full, dome cap included — its own model is
+        # expected to carry the real roof.
+        from scene3d import flatten_footprints
+        want = set(args.mesh_clear_ids)
+        geoms = [r.geometry for _, r in footprints.iterrows()
+                 if int(r["ID"]) in want]
+        check(len(geoms) == len(want), "all --mesh-clear-ids found",
+              f"{len(geoms)}/{len(want)} footprints")
+        dem, n_cleared = flatten_footprints(
+            dem, transform, nodata, geoms, args.bare_dem)
+        print(f"  mesh-clear: {len(geoms)} footprints flattened, "
+              f"{n_cleared:,} cells")
+    elif args.mesh_clear_ids:
+        warn("--mesh-clear-ids ignored", "it only applies with --mesh")
     scene = HeightfieldScene(dem, transform, nodata, device)
+    if args.mesh:
+        from scene3d import load_scene_meshes, HybridScene
+        meshes = load_scene_meshes(args.mesh)
+        scene = HybridScene(scene, meshes)
+        print(f"  mesh: {sum(len(t) for t, _ in meshes):,} triangles "
+              f"from {len(meshes)} file(s)")
     if args.point:
         observers = [(f"obs{i}", x, y) for i, (x, y) in enumerate(args.point, 1)]
         print(f"  observers: {len(observers)} inline --point(s)")

@@ -293,3 +293,74 @@ def write_mesh_ply(path, verts, faces, comment=""):
         np.savetxt(f, verts, fmt="%.3f")
         np.savetxt(f, np.column_stack([np.full(len(faces), 3), faces]),
                    fmt="%d")
+
+
+def write_obj(path, verts, faces, comment=""):
+    """ASCII Wavefront OBJ (triangles only). OBJ is the project's mesh
+    *interchange* format — Blender imports/exports it natively, so the
+    same loader serves both the synthetic test buildings and future
+    externally-modeled chapels. %.4f keeps sub-mm precision; vertices
+    are written as given (callers pass local/site coords, small enough
+    for the format's plain decimals)."""
+    with open(path, "w") as f:
+        if comment:
+            f.write(f"# {comment}\n")
+        np.savetxt(f, np.asarray(verts, dtype=np.float64), fmt="v %.4f %.4f %.4f")
+        # OBJ face indices are 1-based.
+        np.savetxt(f, np.asarray(faces, dtype=np.int64) + 1, fmt="f %d %d %d")
+
+
+def load_obj(path):
+    """Wavefront OBJ -> (verts float64 (V,3), faces int64 (F,3)).
+
+    Deliberately minimal: `v` and `f` records only (normals, UVs,
+    materials, groups are irrelevant to an occlusion test and are
+    skipped). Handles `f v/vt/vn` forms by taking the vertex index
+    before the first slash, negative (relative) indices, and fan-
+    triangulates quads/ngons — enough for Blender exports without
+    pulling in a mesh library."""
+    verts, faces = [], []
+    with open(path) as f:
+        for line in f:
+            parts = line.split()
+            if not parts:
+                continue
+            if parts[0] == "v":
+                verts.append([float(v) for v in parts[1:4]])
+            elif parts[0] == "f":
+                idx = [int(p.split("/")[0]) for p in parts[1:]]
+                idx = [i - 1 if i > 0 else len(verts) + i for i in idx]
+                for k in range(1, len(idx) - 1):     # fan triangulation
+                    faces.append([idx[0], idx[k], idx[k + 1]])
+    verts = np.asarray(verts, dtype=np.float64).reshape(-1, 3)
+    faces = np.asarray(faces, dtype=np.int64).reshape(-1, 3)
+    return verts, faces
+
+
+def check_soup(verts, faces, label="", report_open_edges=True):
+    """Sanity checks for a loaded triangle soup. Index bounds are a
+    hard `check`; degenerate triangles and open edges are `warn`s —
+    the occlusion test is two-sided any-hit, so an open (non-watertight)
+    soup is legitimate, but a *torn* import is worth surfacing in the
+    audit transcript. Returns the triangle array (T,3,3) with
+    degenerates dropped."""
+    tag = f" [{label}]" if label else ""
+    check(len(faces) > 0, f"mesh has triangles{tag}", f"{len(faces):,}")
+    ok_idx = len(faces) == 0 or (int(faces.min()) >= 0
+                                 and int(faces.max()) < len(verts))
+    check(ok_idx, f"mesh face indices in range{tag}")
+    tris = verts[faces]                              # (T, 3, 3)
+    area2 = np.linalg.norm(
+        np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0]), axis=1)
+    degen = area2 < 2e-9                             # area < 1e-9 m^2
+    if degen.any():
+        warn(f"degenerate triangles dropped{tag}", f"{int(degen.sum()):,}")
+        tris = tris[~degen]
+    edges = np.sort(faces[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2), axis=1)
+    _, cnt = np.unique(edges, axis=0, return_counts=True)
+    n_open = int((cnt == 1).sum())
+    if n_open and report_open_edges:
+        warn(f"open (boundary) edges{tag}",
+             f"{n_open:,} — fine for wall panels, check torn imports")
+    check_soup.last_open_edges = n_open
+    return tris

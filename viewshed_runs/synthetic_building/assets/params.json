@@ -1,0 +1,19 @@
+{
+  "center": [
+    254000.0,
+    2820500.0
+  ],
+  "ground_z": 100.0,
+  "size": 8.0,
+  "wall_height": 4.0,
+  "wall_thickness": 0.4,
+  "door_width": 1.2,
+  "door_head": 2.2,
+  "door_sill": 0.0,
+  "dome_radius": 4.0,
+  "dome_lon": 24,
+  "dome_lat": 8,
+  "px": 0.4,
+  "dem_cells": 256,
+  "crs": "EPSG:32636"
+}

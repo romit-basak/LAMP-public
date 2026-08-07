@@ -38,13 +38,51 @@ Not required (the extension covers this), but a good midterm-to-final bridge if 
 ## Extension plan (Aug 24 – Nov 2), in priority order
 
 **1. Apertures — the core unblocked deliverable**
+- **Status 2026-08-05 — architecture decided and demonstrated.** Per
+  Silver's go-ahead (and his synthetic-first instruction), the scene
+  representation question below is resolved: **hybrid heightfield +
+  triangle mesh** behind the existing `Scene` seam. New
+  `scripts/scene3d.py` (`HybridScene`, batched Möller–Trumbore, OBJ
+  loader) + `scripts/make_test_building.py` (synthetic cube + dome +
+  door test assets) + `--mesh` on `viewshed.py`/`observer_view.py`.
+  Demonstrated end-to-end: the inside-observer viewshed fans through
+  the 1.2 m door (1,804 visible cells vs 324 for the doorless control),
+  first-person depth renders show the doorway, all analytic self-checks
+  pass, and no-mesh runs are byte-identical to before (r.viewshed
+  comparison unchanged). Binary transparent/opaque, per the sequencing
+  note below.
+- **Status 2026-08-05 (later) — real-aperture extraction pipeline
+  landed.** The three sources below now feed an editable registry
+  (`250_Apertures/aperture_inventory.csv`, dome-inventory hand-edit
+  rules) via `extract_report_plates.py` (200 report scans + contact
+  sheets — heights read by eye), `extract_site_plan.py` (georeferenced
+  at 1.05 m median residual + per-building registration; **78 door
+  candidates seeded across 76 of 128 labeled chapels** by wall-linework
+  gap detection, each with a confirm/correct QC tile) and
+  `extract_dxf_plans.py` (door widths off the 7 CAD plans — the LW2
+  threshold-mark convention confirmed visually).
+  `build_aperture_walls.py` turns rows into per-building OBJs
+  (thickness + door reveals, roof cap, dome caps) and emits the
+  ready-to-paste `--mesh` args; building 180 validated end-to-end on
+  real data. **Remaining: the human passes** (confirm tiles, read
+  plate heights — demo-first on chapels 180/181, then breadth), the
+  aperture-aware vs solid comparison runs, and integrating the
+  mentor-provided models when they arrive (`--mesh` accepts any OBJ;
+  `--mesh-clear-ids` un-extrudes the replaced footprints).
 - **Data source (resolved by direct inspection, 2026-07-13 — see [[aperture-data-sources]] memory):** no single document gives both location and height, so combine three sources —
   - `Task_2/Site_Plan.pdf` is literally a "Print to PDF" of `100_Data/120_SiteReport/BaseSiteCAD/SITE CAD WORKING.dwg` (confirmed from the PDF's own embedded metadata title). Open that DWG (or `SITE CAD BUILDINGS ONLY.dwg`) directly in QCAD/LibreCAD/AutoCAD rather than accepting the one printed page as the ceiling — it likely covers more of (or the whole) site. Hand-parsing `BaseSiteCAD/Building23.dxf`'s raw geometry shows small notches/jogs in the wall outline that look like a doorway convention, but confirm in a real CAD viewer.
   - `100_Data/120_SiteReport/SiteReport_missing9-12.pdf` (the same 200-page Fakhry excavation-report scan already mined for chapel typology) contains **dozens of individual chapel plates pairing a plan view with a front elevation/section**, with dimension lines — this is the actual source for opening **heights** (sill/head), which no plan-view drawing alone can give. Likely covers a representative subset of chapels, not all 263.
   - For chapels with no published elevation: a documented **typical-height default**, calibrated from whichever chapels the report does illustrate — disclose this as a modeling assumption, don't silently extrapolate.
   - **Orthophoto and `140_SAR_Imagery` are dead ends for this** — confirmed the latter is actually DigitalGlobe optical (MUL/PAN) imagery, not radar, and both it and the orthophoto are near-nadir, so neither can see a vertical wall face or give height regardless of resolution.
 - Design the aperture data model explicitly: which wall, height range (sill/head), width, per opening. Decide whether it lives as a new footprint-adjacent table (parallel to `dome_inventory.csv`'s pattern) or as geometry alongside the per-building `.gpkg` files.
-- Resolve the real architectural question: a heightfield has one z per (x, y) cell, so it **cannot represent a hole partway up a wall**. This is why `viewshed.py`'s docstring already earmarks an *"aperture-capable explicit-geometry scene"* behind the same `Scene` interface (`surface_z` / `visible_mask` / `is_visible`) — decide now whether that's a full mesh/voxel scene for buildings-with-openings (heightfield elsewhere), or a hybrid (heightfield + per-building vertical-plane apertures tested by ray-plane intersection layered on top).
+- ~~Resolve the real architectural question~~ — **resolved 2026-08-05
+  (see status above): hybrid heightfield + per-building triangle mesh**,
+  composed behind the same `Scene` interface (`HybridScene` in
+  `scripts/scene3d.py`). Triangle soup was chosen over vertical-plane
+  apertures because the mentors' real 3D building models (a few
+  chapels, incoming) import as meshes through exactly the same path —
+  one representation serves both hand-built aperture walls and
+  externally-modeled buildings.
 - First cut: binary transparent/opaque apertures (per the CLAUDE.md sequencing note above). Partial transmission (translucent screens, the type-9 "small oval aperture for light" noted in the excavation report) is the follow-on refinement, not blocking.
 - Reuse everything already built: `HeightfieldScene`'s Scene contract, the self-check philosophy (add reciprocity/monotonicity checks for the new scene the same way `run_self_checks` does today), and `observer_view.py`'s first-person renders as the visual audit tool for "does light plausibly pass through this doorway."
 - **Compute:** the remote workstation (RTX 5000 Ada 32 GB, Threadripper Pro 7985WX, 512 GB RAM — see [[remote-workstation-specs]]) already gets picked up automatically by the existing `cuda`-first device selection. If the explicit-geometry scene makes per-ray triangle intersection expensive, its RT cores (via OptiX) are worth evaluating before hand-rolling a BVH.

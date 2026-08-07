@@ -59,8 +59,9 @@ from matplotlib.colors import LogNorm, Normalize, hsv_to_rgb
 from matplotlib.ticker import FuncFormatter
 from rasterio.features import rasterize
 
-from sanity_checks import (ROOT, DEM_REGEN, FOOTPRINTS, VIEWPOINTS,
-                           DOME_INVENTORY, check, warn, failures)
+from sanity_checks import (ROOT, DEM_REGEN, DEM_BASE_04, FOOTPRINTS,
+                           VIEWPOINTS, DOME_INVENTORY, check, warn,
+                           failures)
 from viewshed import (EYE_HEIGHT, STEP, HeightfieldScene, select_device,
                       load_dem, load_observers, apply_dome_overlay)
 from build_dem_with_buildings import hillshade
@@ -155,8 +156,9 @@ def render_hits(scene, eye, ux, uy, slope, max_range, chunk):
     r = d * np.sqrt(1.0 + np.asarray(slope) ** 2)     # slant range
     hx = np.where(hit, eye[0] + ux * d_safe, np.nan)
     hy = np.where(hit, eye[1] + uy * d_safe, np.nan)
+    hz = np.where(hit, eye[2] + slope * d_safe, np.nan)
     elev = np.degrees(np.arctan(slope))
-    return {"d": d, "r": r, "hx": hx, "hy": hy, "hit": hit,
+    return {"d": d, "r": r, "hx": hx, "hy": hy, "hz": hz, "hit": hit,
             "elev": elev, "ux": ux, "uy": uy}
 
 
@@ -380,9 +382,13 @@ def run_self_checks(scene, views):
 
     # Cross-validation: every first-hit point is, by construction, the
     # first visible surface along its ray, so visible_mask must agree it
-    # is visible. Tolerance: a silhouette-edge hit sits on the bilinear
-    # wall ramp where the two kernels' final samples can differ by up to
-    # one march step, flipping the boundary comparison.
+    # is visible. The target is the ray's own 3D point at the hit
+    # (eye_z + slope*d) — NOT surface_z at the plan position, which is
+    # only equivalent on a pure heightfield; a mesh hit (mid-wall, dome)
+    # sits above the ground there, and the ground under it may be
+    # legitimately occluded. Tolerance: a silhouette-edge hit sits on
+    # the bilinear wall ramp where the two kernels' final samples can
+    # differ by up to one march step, flipping the boundary comparison.
     v = max(views, key=lambda v: int(v["res"]["hit"].sum()))
     res = v["res"]
     idx = np.flatnonzero(res["hit"].ravel())
@@ -391,7 +397,7 @@ def run_self_checks(scene, views):
         sel = rng.choice(idx, size=min(2000, idx.size), replace=False)
         hx = res["hx"].ravel()[sel]
         hy = res["hy"].ravel()[sel]
-        hz = scene.surface_z(hx, hy)
+        hz = res["hz"].ravel()[sel]
         ok = np.isfinite(hz)
         vis = scene.visible_mask(v["eye"],
                                  np.column_stack([hx[ok], hy[ok], hz[ok]]))
@@ -471,6 +477,16 @@ def build_parser():
                         "(off by default; needs dome_inventory.csv)")
     p.add_argument("--dome-inventory", type=Path, default=DOME_INVENTORY,
                    help="dome inventory CSV to use with --domes")
+    p.add_argument("--mesh", type=Path, nargs="+",
+                   help="OBJ mesh(es) added as explicit 3D occluders — "
+                        "aperture-capable buildings rays can pass through "
+                        "(scripts/scene3d.py hybrid scene)")
+    p.add_argument("--mesh-clear-ids", type=int, nargs="+",
+                   help="with --mesh: footprint IDs whose extruded "
+                        "blocks are flattened back to the bare-earth "
+                        "DEM so the mesh version doesn't double-occlude")
+    p.add_argument("--bare-dem", type=Path, default=DEM_BASE_04,
+                   help="bare-earth DEM sampled by --mesh-clear-ids")
     return p
 
 
@@ -494,11 +510,33 @@ def main():
         dem, n_domes, n_cells = apply_dome_overlay(
             dem, transform, nodata, args.dome_inventory, footprints)
         print(f"  domes: {n_domes} chapels overlaid, {n_cells:,} cells raised")
+    if args.mesh and args.mesh_clear_ids:
+        # Same ordering as viewshed.py: flattened after --domes, so a
+        # mesh building leaves the heightfield entirely (dome included).
+        from scene3d import flatten_footprints
+        want = set(args.mesh_clear_ids)
+        geoms = [r.geometry for _, r in footprints.iterrows()
+                 if int(r["ID"]) in want]
+        check(len(geoms) == len(want), "all --mesh-clear-ids found",
+              f"{len(geoms)}/{len(want)} footprints")
+        dem, n_cleared = flatten_footprints(
+            dem, transform, nodata, geoms, args.bare_dem)
+        print(f"  mesh-clear: {len(geoms)} footprints flattened, "
+              f"{n_cleared:,} cells")
+    elif args.mesh_clear_ids:
+        warn("--mesh-clear-ids ignored", "it only applies with --mesh")
     if args.step_scale > 1.0:
         warn("march step coarsened", f"x{args.step_scale:g} — thin walls "
              "may be stepped over; use 1.0 for audit-grade output")
     scene = HeightfieldScene(dem, transform, nodata, device,
                              step=STEP * args.step_scale)
+    if args.mesh:
+        # Imported lazily so runs without --mesh keep today's startup.
+        from scene3d import load_scene_meshes, HybridScene
+        meshes = load_scene_meshes(args.mesh)
+        scene = HybridScene(scene, meshes)
+        print(f"  mesh: {sum(len(t) for t, _ in meshes):,} triangles "
+              f"from {len(meshes)} file(s)")
 
     if args.point:
         observers = [(f"obs{i}", x, y) for i, (x, y) in enumerate(args.point, 1)]

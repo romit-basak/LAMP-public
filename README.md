@@ -29,12 +29,27 @@ build_dem_with_buildings.py rasterize footprint heights onto the base DEM
         │
 build_dome_layer.py         (optional) typology + orthophoto → dome_inventory.csv
         │                   + domes.gpkg (QGIS 3D visualization)
+        │
+make_test_building.py       (optional) synthetic cube+dome+door assets for the
+        │                   aperture experiment (scene3d.py runs its self-checks)
+        │
+extract_report_plates.py    → report scans → read_report_directions.py (OCR)
+        │                     → entrance_directions.csv → apertures_from_report.py
+        │                     → aperture_inventory.csv (the registry)
+extract_site_plan.py        (secondary) plan georeferencing + QC tiles
+extract_dxf_plans.py        (secondary) CAD plots for measured door widths
+        ▼
+build_aperture_walls.py     registry → per-building OBJ walls with real
+        │                   openings + roof caps + dome caps (--mesh input)
         ▼
     viewshed.py              cast rays, write viewsheds / visibility graph / 3D volume
         │                    (--domes bakes dome_inventory.csv into the ray-cast
-        │                     surface in-memory, opt-in, experimental)
+        │                     surface in-memory, opt-in, experimental;
+        │                     --mesh adds OBJ buildings with real openings —
+        │                     the aperture-capable hybrid scene, scene3d.py)
         ├── observer_view.py     first-person snapshots of what each observer sees
-        │                        (same ray-march kernel; pano + perspective PNGs)
+        │                        (same ray-march kernel; pano + perspective PNGs;
+        │                         also --mesh-aware)
         ├── volume_convert.py    (optional) volume CSV → PLY / NPY / GeoTIFF / LAS / LAZ
         └── compare_baseline.py  validate against the GRASS r.viewshed baseline
 
@@ -184,6 +199,14 @@ always omnidirectional)
 | `--domes` | off | Bake dome caps into the ray-casting surface in-memory before analysis. Needs `dome_inventory.csv` from `build_dome_layer.py`. Off by default; the validated buildings-only comparison is unaffected |
 | `--dome-inventory` | `dome_inventory.csv` | Override the inventory CSV location |
 
+**Apertures / mesh buildings** (step 2 — `scripts/scene3d.py` hybrid scene)
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--mesh` | off | OBJ mesh(es) added as explicit 3D occluders. Unlike the heightfield, a mesh wall can have a real opening (door/window) rays pass through. Runs without `--mesh` are byte-identical to before |
+| `--mesh-clear-ids` | — | With `--mesh`: footprint IDs whose extruded blocks are flattened back to the bare-earth DEM, so a building the mesh now represents doesn't occlude twice |
+| `--bare-dem` | Current_DEM 0.4 m | Bare-earth DEM sampled by `--mesh-clear-ids` |
+
 **Examples**
 
 ```bash
@@ -204,6 +227,26 @@ always omnidirectional)
 
 # Any point file, 360°, select specific observers by id
 .venv/bin/python scripts/viewshed.py --observers my_points.shp --ids 80 180 181
+```
+
+**Aperture demo** (synthetic cube+dome+door — the step-2 experiment):
+
+```bash
+.venv/bin/python scripts/make_test_building.py       # writes the assets
+.venv/bin/python scripts/scene3d.py                   # aperture self-checks
+A=viewshed_runs/synthetic_building/assets
+# observer inside the building: the visibility fan spills through the door
+.venv/bin/python scripts/viewshed.py --dem $A/flat_dem.tif \
+    --footprints $A/footprint.gpkg --observers $A/observers.gpkg --ids 2 \
+    --mesh $A/building.obj --radius 40 --no-graph \
+    --out-dir viewshed_runs/synthetic_building/inside_door
+# control: same run against building_solid.obj -> only the interior remains
+# first-person view of the doorway from outside (depth shading)
+.venv/bin/python scripts/observer_view.py --dem $A/flat_dem.tif \
+    --footprints $A/footprint.gpkg --observers $A/observers.gpkg --ids 1 \
+    --mesh $A/building.obj --persp 0 --modes depth natural --no-ortho \
+    --no-markers --max-range 60 \
+    --out-dir viewshed_runs/synthetic_building/fp_outside
 ```
 
 ### `scripts/observer_view.py` — first-person snapshots
@@ -234,6 +277,7 @@ test, hollow red = occluded).
 | `--step-scale` | `1.0` | March-step multiplier; >1 fast but can leak through thin walls |
 | `--no-markers` | off | Skip other-observer markers |
 | `--domes` / `--dome-inventory` | off | Bake dome caps into the surface first |
+| `--mesh` | off | OBJ mesh(es) as explicit 3D occluders — as `viewshed.py` |
 
 ```bash
 # all observers, full 360° pano, all three shadings
@@ -245,6 +289,115 @@ test, hollow red = occluded).
 Self-checks include a cross-validation: sampled first-hit points must be
 visible to `visible_mask` (the r.viewshed-validated kernel) — runs at
 99.6–100% in practice.
+
+### `scripts/scene3d.py` — aperture-capable hybrid scene
+
+The step-2 seam in action: `HybridScene` wraps the validated
+`HeightfieldScene` and adds OBJ triangle meshes as explicit occluders
+(batched Möller–Trumbore, same cuda→mps→cpu stack). A mesh wall can
+carry a real opening, so rays pass *through* doors and windows — the
+thing a heightfield structurally cannot represent. Composition:
+`visible_mask` = heightfield AND clear-of-triangles; `first_hit` = min
+of the two distances; `surface_z` stays heightfield (eye placement
+unchanged). Not run directly in the pipeline — `viewshed.py --mesh` and
+`observer_view.py --mesh` construct it — but running the module itself
+executes the aperture self-checks against the synthetic assets
+(analytic door/wall/dome sightlines, reciprocity, exact first-hit
+distances, kernel-consistency fan).
+
+### `scripts/make_test_building.py` — synthetic aperture test assets
+
+Generates the mentor-specified minimal aperture case: a hollow cube
+chapel (8 m, 0.4 m walls) with a hemispherical dome and a 1.2 × 2.2 m
+door in the south wall, on a flat ground raster at site-like UTM
+coordinates — self-contained, no datastore needed, every expected
+sightline analytic. Writes `building.obj`, `building_solid.obj` (no
+door — the control), `flat_dem.tif`, `footprint.gpkg`,
+`observers.gpkg` (1 = outside the door, 2 = inside, 3 = blank-wall
+control), `building_qc.png`, `params.json`. All dimensions are flags
+(`--size`, `--door-width`, `--door-head`, `--dome-radius`, …). See the
+aperture demo block above for the standard runs.
+
+### The aperture pipeline — real doors from real sources
+
+Four scripts populate and consume `aperture_inventory.csv` (in
+`200_Projects/250_Apertures/`, datastore) — one row per opening,
+anchored to a **canonical wall index** of its footprint
+(`scripts/aperture_registry.py` holds the shared canonicalization and
+schema; rows carry the wall's azimuth + midpoint as drift detectors).
+Provenance is split per row: `source_pos` (where the door's location
+came from) and `source_dims` (where its width/heights came from) —
+`siteplan` / `dxf` / `plate` / `default` — so the comparison report can
+always separate measured from assumed. Extraction scripts never
+overwrite an existing registry (the dome-inventory hand-edit rule):
+reruns write `siteplan_candidates.csv` for manual merging.
+
+**`extract_report_plates.py`** dumps the 200 excavation-report page
+scans (the only height source; 617 MB PDF, one JPEG per page,
+memory-mapped hand extraction) plus browsable contact sheets and a
+`plate_index.csv` template. *Manual workflow*: browse the contact
+sheets → open the full-res `page_NNN.jpg` → read door sill/head/width
+off the plate's dimension lines → edit the registry row
+(`source_dims=plate`, note the page number). Chapter III's per-chapel
+descriptions start around p.88.
+
+**`extract_site_cad.py`** is the *measured* aperture source, and takes
+precedence where it has data. It converts the binary
+`SITE CAD WORKING.dwg` with `dwg2dxf` (LibreDWG — a one-off dev tool,
+`brew install libredwg`), which preserves the layers the PDF print
+destroys. Georeferences on 274 `NUMBERING` labels (0.93 m median
+residual) and reads door threshold marks off the `LW2` layer, giving a
+real wall, position and width. **Coverage is inherently ~3 chapels**
+(23/24/25): only buildings drawn in detail carry `LW1`/`LW2`. The rest
+are plain outlines, and their open-polyline end gaps are *not* doors —
+tested against the report's stated directions they agree 36% against a
+~25% chance baseline.
+
+**`read_report_directions.py`** is the site-wide aperture source. It
+OCRs Chapter III (`tesseract`, ~2.3 s/page, cached to
+`report_plates/ocr/`) and pulls each chapel's stated entrance
+direction from sentences like *"A chapel of Type 1 which opens
+south"*, keeping the quote and book page for audit. **186 of 263
+chapels (71%)** yield a direction this way; validated 6/6 against
+pages read by eye. Chapels whose entry states no direction are listed
+so they can be chased by hand.
+
+**`extract_site_plan.py`** georeferences `Task_2/Site_Plan.pdf` (median
+residual ~1 m) and writes per-chapel QC tiles. **Its door detection is
+secondary and unreliable** — the plan's apparent wall-line gaps are
+dominated by plan-vs-footprint registration artifacts at corners, and
+the one ground-truthed chapel (180) has unbroken linework across its
+real entrance. Use the tiles to sanity-check a direction, not to
+source one.
+
+**`extract_dxf_plans.py`** plots the 7 detailed CAD plans (buildings
+1/23–26/175/210; LW1 walls black, LW2 detail orange — the orange
+threshold marks bridging wall gaps are the doors) beside the chapel's
+canonical wall indices, for measured door widths (`source_dims=dxf`).
+
+**`build_aperture_walls.py`** turns registry rows into
+`meshes/building_<ID>.obj`: outer + inner wall faces (0.4 m thickness
+with real door reveals, so oblique sightlines are clipped by wall
+depth; zero-thickness fallback for circular/tiny footprints), roof cap,
+and the chapel's dome cap from `dome_inventory.csv` (`--no-domes` to
+skip). Wall bases follow the bare DEM; wall tops follow the same
+fitted roof plane QGIS extrusion uses. Also writes per-building QC
+renders, a site coverage figure, and `mesh_args.txt` — the
+ready-to-paste `--mesh … --mesh-clear-ids … --bare-dem …` fragment for
+`viewshed.py`. `--self-test` proves registry→mesh→engine on synthetic
+data with analytic sightlines; `--calibrate` reports measured-opening
+statistics for updating the documented defaults (provisional: width
+1.0 m, sill 0, head 2.1 m).
+
+```bash
+.venv/bin/python scripts/extract_report_plates.py     # once, ~1 min
+.venv/bin/python scripts/read_report_directions.py    # OCR, ~4 min
+.venv/bin/python scripts/apertures_from_report.py     # -> registry rows
+.venv/bin/python scripts/build_aperture_walls.py      # -> 188 meshes
+.venv/bin/python scripts/viewshed.py \
+    --observers LAMP_DataStore/.../160_ViewpointMarks/my_observers.gpkg \
+    --ids 18001 18002 18101 $(cat .../meshes/mesh_args.txt) --no-graph
+```
 
 ### `scripts/volume_convert.py`
 
@@ -340,9 +493,13 @@ box:
 2. From the repo root, junction the datastore so `../LAMP_DataStore/...`
    layer paths resolve (the junction must contain `ElBagawat/`):
 
-   ```bat
-   mklink /J LAMP_DataStore D:\path\to\datastore-root
+   ```powershell
+   New-Item -ItemType Junction -Path LAMP_DataStore -Target D:\path\to\datastore-root
    ```
+
+   (`mklink` is a `cmd.exe` builtin, not a PowerShell command — it fails
+   with "not recognized" if run directly at a PowerShell prompt; the
+   `New-Item` form above is the native equivalent.)
 
 3. Make sure the generated artifacts the project references exist in the
    datastore: `DEMWithBuildings-0.4m-*.tif` and `domes.gpkg`

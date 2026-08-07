@@ -115,30 +115,38 @@ build_dem_with_buildings.py  rasterize footprint heights onto the base DEM
         │
 build_dome_layer.py          (optional) typology + orthophoto -> dome layer
         │                    for QGIS 3D + viewshed.py's --domes
+        │
+make_test_building.py        (optional) synthetic cube+dome+door assets;
+        │                    scene3d.py runs the aperture self-checks (§10)
+        │
+extract_report_plates.py     aperture sources -> aperture_inventory.csv
+extract_site_plan.py         (registry; human-in-the-loop by design, §11)
+extract_dxf_plans.py         -> build_aperture_walls.py -> building OBJs
         ▼
     viewshed.py               cast rays -> viewsheds / visibility graph / 3D volume
-        │   │                          │
+        │   │                          │   (--mesh -> scene3d.py hybrid scene)
 compare_baseline.py ──────────┘        volume_convert.py
 (validate vs GRASS)                    (CSV -> PLY / NPY / GeoTIFF / mesh,
         │                                via volume_mesh.py, a shared library)
         ▼
-observer_view.py              first-person snapshots (same Scene, first_hit kernel)
+observer_view.py              first-person snapshots (same Scene, first_hit kernel;
+                              also --mesh-aware)
 
 export_scene_bundle.py -> scene_bundle/ -> blender/build_bagawat_scene.py + Unity
 ```
 
-Eight runnable scripts, one shared library module
-([volume_mesh.py](../scripts/volume_mesh.py) — imported by two of them,
-never run directly itself), and one Blender-side runner
-([blender/build_bagawat_scene.py](../blender/build_bagawat_scene.py)) that
-lives outside the regular Python environment entirely (Blender ships its own
-Python interpreter — see §8).
+Ten runnable scripts, two shared library modules
+([volume_mesh.py](../scripts/volume_mesh.py) — mesh/point-cloud I/O and
+checks; [scene3d.py](../scripts/scene3d.py) — the aperture-capable hybrid
+scene, also runnable as its own self-check, see §10), and one Blender-side
+runner ([blender/build_bagawat_scene.py](../blender/build_bagawat_scene.py))
+that lives outside the regular Python environment entirely (Blender ships
+its own Python interpreter — see §8).
 [sanity_checks.py](../scripts/sanity_checks.py) is the shared foundation —
 every other script imports its canonical asset paths and its `check` /
-`warn` / `failures` self-check vocabulary. A ninth script,
+`warn` / `failures` self-check vocabulary. One more script,
 [run_gui.py](../scripts/run_gui.py), isn't part of the pipeline itself — it's
-a browser-form wrapper around all eight of the others' command lines (see
-§9).
+a browser-form wrapper around all the others' command lines (see §9).
 
 ---
 
@@ -531,6 +539,12 @@ mean surgery across the whole file — the per-observer loop, the combined-layer
 logic, the graph builder, the volume sampler would all need rewriting, and each is
 a chance to introduce a regression in code that is already validated. The seam
 isolates the one part that is *supposed* to change.
+
+**This promise has now been exercised.** Step 2's aperture-capable
+scene exists — `HybridScene` in `scripts/scene3d.py` (§10) — and it
+dropped in exactly as designed: `--mesh` wraps the constructed
+`HeightfieldScene`, and the driver, graph builder, volume sampler, and
+first-person renderer all run against it unchanged.
 
 ### 4.2 World → pixel, and why eye-relative coordinates
 
@@ -1265,6 +1279,187 @@ exactly the bug class this whole design was built to avoid.
 
 ---
 
+## 10. `scripts/scene3d.py` + `make_test_building.py` — apertures
+
+**The problem these solve.** The whole project exists because standard
+viewshed tools treat buildings as solid blocks. The heightfield engine
+(§4) shares one structural limit with them: it stores a single
+elevation per (x, y) column, so it cannot represent a wall that is
+solid, then open (a doorway), then solid again along the same vertical
+line — there is only one z to test against. Real openings need real 3D
+geometry.
+
+**The representation: triangle soup from OBJ files.** Buildings with
+openings are triangle meshes; everything else stays the validated
+heightfield. Wavefront OBJ is the interchange format because Blender
+reads/writes it natively — the same loader that takes the synthetic
+test building will take the mentors' modeled chapels when they arrive.
+The hand-written parser in `volume_mesh.py` (~30 lines: `v` and `f`
+records, everything else skipped) keeps the project's no-new-
+dependencies stance; no watertightness is required, because the
+occlusion test is "does any triangle cut this segment," not an
+inside/outside query.
+
+**The composition rule (`HybridScene`).** Wraps an already-built
+`HeightfieldScene` — composition, not subclassing, so the validated
+kernel is never edited:
+
+- `visible_mask` = heightfield answer AND no triangle cuts the
+  eye→target segment. The mesh test only runs on the heightfield's
+  survivors (AND doesn't care about order — testing fewer targets is
+  pure savings).
+- `first_hit` = elementwise minimum of the heightfield hit and the
+  mesh hit. Both are in the same parameter: ray directions are
+  (ux, uy, slope) with (ux, uy) a *unit horizontal* vector, so the
+  raw ray-triangle parameter t **is** the horizontal distance — no
+  conversion, and the heightfield hit doubles as the mesh search's
+  cutoff (a mesh hit beyond it can never win the min).
+- `surface_z` stays heightfield-only. Eye placement and the raster
+  grid keep exactly their old semantics; a mesh-aware standing
+  surface (observers on mesh roofs) is a noted deferred refinement.
+- Grid attributes (`dem_np`, `H`, `W`, transform pieces…) forward to
+  the base scene via `__getattr__`, so every raster/QC consumer is
+  oblivious to the wrapper.
+
+**The intersection kernel.** Batched two-sided Möller–Trumbore in
+torch, on the same cuda→mps→cpu stack. Two idioms carry over from the
+heightfield march: triangles are translated to *eye-relative*
+coordinates in float64 on the host before the float32 upload (raw UTM
+magnitudes would eat the precision), and work is chunked (rays ×
+triangles capped per batch) so device memory stays bounded. Because
+the ray origin is the zero vector in eye-relative coordinates, two of
+the three classic Möller–Trumbore terms become per-triangle constants
+computed once per chunk. Per-file bounding boxes let a query skip
+whole buildings its rays cannot reach; a 2D grid or BVH stays the
+profiling-gated next step if real chapel models ever make brute force
+slow (CLAUDE.md's long-standing note).
+
+**One self-check had to be *removed* for hybrid scenes** — and the
+reason is the feature working. `run_self_checks`' "raising the eye
+never reduces the visible count" is a theorem for heightfields, but
+with apertures it is simply false: raise the eye above the door head
+and the through-the-door cells legitimately disappear. The check now
+skips (with a `warn` in the transcript) when the scene has meshes.
+Likewise, `observer_view.py`'s first_hit↔visible_mask cross-validation
+had to start testing the ray's own 3D hit point rather than
+`surface_z` at the hit's plan position — a mesh hit (mid-wall, dome)
+floats above the heightfield ground, and the ground *under* it may be
+legitimately occluded even though the hit itself is visible.
+
+**`make_test_building.py` — the synthetic proving ground.** The mentor-
+specified minimal case: an 8 m hollow cube (0.4 m walls — one DEM
+pixel, chapel-like), a hemispherical dome, and a 1.2 × 2.2 m door in
+the south wall, standing on a perfectly flat generated DEM at
+site-like UTM coordinates. Flat ground + mesh-only building means (a)
+no double occlusion by construction, (b) no datastore dependency, and
+(c) every expected sightline is *analytic* — the self-checks in
+`scene3d.py` assert exact outcomes (door ray passes, above-head ray
+blocked by the header, dome blocks an over-the-walls segment, the
+through-the-door first hit lands on the far inner wall at exactly
+10 + 8 − 0.4 = 17.6 m), not eyeballed ones. A `building_solid.obj`
+control (same geometry, no door) turns every demo into a before/after
+pair: the inside observer sees 1,804 cells with the door, 324 (its own
+interior) without.
+
+---
+
+## 11. The aperture pipeline — registry, extractors, wall builder
+
+**The data problem.** No single document records the chapels'
+openings. Three partial sources exist: the georeferenceable site plan
+(door *locations* for ~131 labeled chapels, drawn as gaps in wall
+linework), seven detailed CAD plans (measured door *widths*), and the
+200-page excavation-report scan (the only *height* source — dimension
+lines on plates, readable only by eye). The pipeline's design center
+is therefore the **human-in-the-loop registry**:
+`aperture_inventory.csv`, one row per opening, seeded by automation,
+finished by hand, never overwritten by any script (the dome-inventory
+rule — reruns emit `siteplan_candidates.csv` instead).
+
+**Why "canonical wall index" needs a shared function.** A row anchors
+its opening to wall N of the footprint — but raw footprint rings have
+digitizing slivers (0.03 m edges), collinear splits (one wall drawn as
+two segments) and densified circles, so a raw ring index is unstable.
+`aperture_registry.canonical_walls()` (shared by seeder and builder —
+one implementation, or the index means different things in different
+scripts) simplifies, merges slivers and near-collinear edges, orients
+CCW and starts at the lexicographically-lowest vertex. Each row also
+stores the wall's outward azimuth and midpoint; `resolve_wall()`
+verifies them at build time and re-matches by nearest midpoint (warn)
+or refuses (check-fail) — a silently renumbered wall must never get a
+hole cut on faith.
+
+**The source that worked, and the one that didn't.** The plan was the
+obvious place to look for doors and it turned out to be the wrong one:
+its apparent wall-line gaps are dominated by registration artifacts at
+footprint corners, and the one chapel we ground-truthed (180) has
+*unbroken* linework across its real entrance. The report, meanwhile,
+simply says so in words — "(212) A chapel of Type 1 which opens
+south" — for 186 of 263 chapels. `read_report_directions.py` OCRs
+Chapter III with tesseract (psm 3, which keeps the centred `(NNN)`
+headings on their own lines where psm 6 swallows them), splits into
+per-chapel entries, and matches direction phrases anchored on
+opens/entrance/faces so that a passing mention ("niches in the east,
+south and north walls") cannot be mistaken for the entrance. Each row
+keeps its quote and book page, so any number in the final report can
+be traced to a sentence on a page.
+
+Two things this bought beyond coverage. It **caught an error two
+independent visual reads had made**: chapel 180 is the Church, whose
+ring of plan circles is a *peristyle wrapping the whole building*, not
+a portico marking the entrance facade — the report puts the entrance
+at the south-west corner. And it produced a checkable distribution:
+S 69, W 65, E 51, **zero north**, which is a real property of the site
+(the string "opens north" appears once in 95 OCR'd pages, inside
+"opens *south* and is at the north end"), not a regex blind spot.
+
+**Georeferencing the site plan without georeferencing.** The PDF is a
+print of the CAD, so it has no CRS — but its 131 chapel-number labels
+double as control points: an affine fit from label anchors to
+footprint centroids lands at ~1 m median residual. One global affine
+isn't enough, though: the plan and the photogrammetric footprints are
+independent drawings, so individual buildings sit a metre or three
+off. A per-building translation search (maximize wall-linework
+coverage over a ±3 m grid) fixes registration locally — that one step
+took the door-candidate yield from 10 chapels to 76.
+
+**Doors as gaps.** With no pen/layer separation in the print, the
+detector reads a door the way a human reads a plan: a 0.5–2.5 m
+*uncovered* stretch of an otherwise-drawn wall. Walls with under 50%
+linework coverage yield nothing (an undrawn wall is not evidence of a
+door), and circular buildings defeat the interior-gap test entirely —
+both degrade to the same fallback, the per-chapel QC tile a human
+reads anyway. Candidates are seeds marked `confidence=low`, not truth.
+
+**The wall builder.** `wall_panel()` generalizes the synthetic
+builder's axis-aligned panels: parametrized by distance along
+arbitrary 2D endpoints, multiple holes per wall (sorted; inter-hole
+strips + header/sill bands), sheared bases (bare-DEM per vertex,
+sunk 0.3 m against daylight gaps) and tops (the dome layer's fitted
+roof plane, evaluated per vertex so the mesh roofline matches the
+QGIS extrusion). Thickness is real: inner faces offset along the
+inward normal — extended half a thickness past both ends so corners
+*overlap* rather than gap, which an any-hit occlusion test can't see
+but a gap would leak light through — with jamb/header/sill reveal
+faces, so oblique sightlines through a doorway are clipped by wall
+depth (thesis-relevant: zero-thickness holes overstate angular
+admittance). Circular or too-small footprints fall back to
+zero-thickness single faces with a warn. The roof cap is a
+hand-rolled ear-clip; dome caps come from `dome_inventory.csv` (they
+must ride along: `--mesh-clear-ids` removes the heightfield block,
+dome and all).
+
+**`--self-test` is the contract.** It builds a synthetic square
+building from one in-memory registry row, over an in-memory flat DEM,
+and runs the same analytic sightline probes the synthetic-building
+experiment validated (through-door passes; above-head, blank-wall
+blocked; first hit on the far inner wall at exactly
+10 + 10 − 0.4 m). Run it after any change to this pipeline — it
+exercises registry semantics, wall geometry, and the hybrid engine in
+one pass with zero real data.
+
+---
+
 ## Hall of hacks: every non-obvious trick, in one table
 
 Every place in the codebase that does something a newcomer might read as
@@ -1306,6 +1501,20 @@ pass, not live bugs.
 | `blender/build_bagawat_scene.py` | Forces the "Khronos PBR Neutral" color view transform | Blender's newer default (AgX) visibly washed out this project's grayscale drape in real test renders | Renders would look duller/grayer than the source imagery actually is |
 | `blender/build_bagawat_scene.py` | `ensure_nodes()` checks `datablock.node_tree is None`, never reads/writes `use_nodes` directly unless still required | `use_nodes` is deprecated for removal in Blender 6.0 (nodes become the only mode); even *reading* it emits a `DeprecationWarning`, not just setting it | Warnings on every run today; an `AttributeError` once the property is actually removed |
 | `scripts/run_gui.py` | Reads each script's flags via `build_parser()` + argparse's private `_actions`, instead of a hand-written schema | One place defines each flag, for both the CLI and the GUI — a separate schema would drift the same way `--zstep`'s help text once did | The GUI could silently show/accept a flag that no longer matches what the script actually does |
+| `scene3d.py`, `_mt_min_t` | Triangles translated to eye-relative float64 on host before the float32 upload | Same precision cliff as the heightfield march: float32 can't hold a metre-scale offset against a ~2.8e6 UTM coordinate | Intersection tests would quantize; hits jitter or vanish, silently |
+| `scene3d.py`, `_mt_min_t` | Barycentric bounds accept a hair *outside* the triangle (`-1e-6`) | Adjacent triangles share edges exactly; testing strictly inside lets a ray thread the float-rounding crack between them | Occasional one-ray light leaks through solid walls, unreproducible across devices |
+| `scene3d.py`, `segment_blocked` | Hits within 5 cm of the target don't count as blockers | A viewshed target can lie exactly ON a wall face; the surface it sits on isn't an occluder of itself | Every cell whose surface point touches a mesh wall would read "not visible" |
+| `scene3d.py`, `HybridScene.first_hit` | Passes the heightfield's own hit as the mesh search cutoff | The final answer is min(heightfield, mesh) — a mesh hit farther than the heightfield's can never win | Nothing breaks; it's a free cull that keeps mesh cost proportional to what's actually in view |
+| `viewshed.py`, `run_self_checks` | Eye-height monotonicity check skipped when the scene has meshes | Raising the eye above a door head legitimately *loses* the through-the-door cells — the "theorem" only holds for heightfields | A correct aperture run would FAIL its own self-check |
+| `observer_view.py`, cross-validation | Tests the ray's own 3D hit point (`eye_z + slope·d`), not `surface_z` at the hit's plan position | A mesh hit (mid-wall, dome) floats above the heightfield ground; the ground under it may be legitimately occluded | The hybrid scene's renders would fail cross-validation at ~93% despite being correct |
+| `aperture_registry.canonical_walls` | Ring simplification + sliver merge + collinear drop + lex-lowest start, in one shared function | "Wall index N" must mean the same wall in the seeder and the builder, across digitizing noise | A hole cut into the wrong wall with no error anywhere |
+| `aperture_registry`, registry rows | Each row stores its wall's azimuth + midpoint redundantly | Detects wall renumbering after footprint edits or tolerance changes | A drifted index would silently anchor the door to a different wall |
+| `extract_site_plan.py`, `best_local_shift` | Per-building ±3 m translation search after the global affine | The plan and the footprints are independent drawings; buildings sit metres off individually | Door-candidate yield drops ~7x (10 vs 76 chapels, measured) |
+| `extract_site_plan.py`, `find_gaps` | Gaps only count on walls ≥50% covered by linework | An undrawn wall is absence of data, not evidence of a door | Every sparsely-drawn wall would sprout phantom door candidates |
+| `build_aperture_walls.py`, inner faces | Inner wall panels extended half a thickness past both ends | Corner overlap is invisible to an any-hit test; a corner gap leaks light | Oblique rays could slip through wall corners from inside |
+| `scene3d.py`, `_gather_reachable` | Concatenates all reachable meshes into ONE triangle array per query | The graph builder issues a `visible_mask` per building; per-file dispatch made that ~49k kernel launches whose upload overhead dwarfed the arithmetic | The visibility graph takes so long it is effectively unrunnable site-wide |
+| `read_report_directions.py` | tesseract `--psm 3`, and headings accept `9)` as well as `(9)` | psm 6 merges the centred `(NNN)` heading into the body text and loses the number; OCR drops a bracket often enough to matter | Whole chapels silently vanish from the extraction (chapel 9 did) |
+| `read_report_directions.py` | Direction regexes anchored on opens/entrance/faces/façade | Chapel entries name compass points for niches and adjacent walls constantly | Half the chapels would get a direction taken from a niche description |
 
 A handful of smaller, lower-stakes magic numbers exist too (a `1e-9`
 division-guard epsilon here, a `97`-element sampling stride there, a `0.1 m`
