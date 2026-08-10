@@ -43,9 +43,22 @@ REGISTRY_COLS = ["ID", "ap_id", "kind", "wall", "s_m", "width_m",
 # — but it beats the round 1.0 m it replaces, and it is narrower,
 # which makes the aperture effect smaller rather than flattering it.
 #
-# SILL and HEAD remain wholly assumed. Neither the report text nor the
-# CAD states a door height anywhere; only the plate elevation drawings
-# could supply one, and those are graphical.
+# SILL and HEAD remain wholly assumed for doors. Neither the report
+# text nor the CAD states a door height anywhere; only the plate
+# elevation drawings could supply one. Those drawings were read
+# (scripts/extract_plate_figures.py), pixel-exact against their own
+# scale bars, and the finding is negative rather than confirmatory:
+# the plain rectangle in the middle of a decorated facade (present on
+# chapels 8/45/71/166 and read carefully on two of them) measures only
+# 0.3-0.45 m wide — narrower than a passable doorway and narrower than
+# every CAD-measured door (0.79-1.09 m). It is very likely a recessed
+# decorative panel drawn *within* the true opening, not the opening
+# itself, but there is no second view (e.g. a plan cut at the same
+# spot) to confirm which. Rather than merge a number that may be
+# measuring the wrong thing, the defaults below are left as the CAD
+# calibration alone. Most plates can't help further regardless:
+# plan-only figures (~20 of 29 with a scaled drawing) show no wall
+# break for the door at all.
 DOOR_WIDTH = 0.86
 DOOR_HEAD = 2.1
 DOOR_SILL = 0.0
