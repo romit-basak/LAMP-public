@@ -44,9 +44,11 @@ import rasterio
 
 from sanity_checks import (FOOTPRINTS, DEM_BASE_04, DOME_INVENTORY,
                            ROOT, check, warn, failures)
-from aperture_registry import (APERTURES_DIR, INVENTORY, DOOR_WIDTH,
-                               DOOR_HEAD, DOOR_SILL, canonical_walls,
-                               largest_poly, resolve_wall)
+from aperture_registry import (APERTURES_DIR, INVENTORY, BUILDING_FABRIC,
+                               DOOR_WIDTH, DOOR_HEAD, DOOR_SILL,
+                               canonical_walls, largest_poly, resolve_wall,
+                               row_kind, row_perforates, row_face,
+                               row_depth, opening_rect)
 from make_test_building import rect, dome
 from volume_mesh import load_obj, check_soup, write_obj
 
@@ -54,6 +56,52 @@ ORTHO = (ROOT / "100_Data/150_DigitalElevationModel/Generated_DEMs/"
          "Current_DEM/Bagawat-DEM-NewImageryOnly-0.4m-ORTHOPHOTO.tif")
 DOME_SINK = 0.35          # dome centre sits this fraction of r below
                           # the roofline (the dome layer's convention)
+OPENING_MODES = ("none", "doors", "perforating", "all")
+THICKNESS_MODES = ("legacy", "fabric")
+
+
+def built_thickness(geom, nominal, rule_t):
+    """The thickness a footprint is actually built at: `nominal`, or 0.
+
+    Circular footprints (densified rings, so many vertices that an
+    inward offset self-intersects) and footprints too small to hold a
+    3x-thickness core fall back to single-sheet walls. `rule_t` is the
+    thickness the *predicate* runs on, which is deliberately allowed to
+    differ from the one built, so a fabric run can be compared against
+    legacy without the two effects riding on each other.
+
+    Anything reasoning about a wall's depth — a recess, a target inside
+    one — has to agree with the mesh about which walls have none, so
+    the rule lives here rather than inline at its one caller."""
+    poly = largest_poly(geom)
+    thin = (len(poly.exterior.coords) > 30
+            or poly.buffer(-3 * rule_t).is_empty)
+    return 0.0 if thin else nominal
+
+
+def load_fabric(path, check, warn):
+    """building id -> wall thickness (m) from the fabric table.
+
+    Kept separate from the aperture registry because thickness is a
+    property of the building, not of any one opening, and because a
+    building with no opening still needs one."""
+    if not path.exists():
+        check(False, "fabric table present", str(path))
+        return None
+    out = {}
+    with open(path, newline="") as f:
+        for r in csv.DictReader(f):
+            try:
+                bid, t = int(r["ID"]), float(r["wall_thickness_m"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if t <= 0:
+                warn(f"ID {bid} has a non-positive thickness", str(t))
+                continue
+            out[bid] = t
+    check(bool(out), "fabric table has usable rows",
+          f"{len(out)} buildings")
+    return out
 
 
 def wall_panel(p0, p1, zb, zt, verts, faces, holes=()):
@@ -63,10 +111,18 @@ def wall_panel(p0, p1, zb, zt, verts, faces, holes=()):
     linearly along the wall, so sloped ground and a fitted roof plane
     both come out as sheared quads (rect takes arbitrary corners).
     `holes` = [(s0, s1, z_lo, z_hi)] in metres along p0->p1, absolute
-    z; they must be pre-sorted, non-overlapping and inside the panel.
-    Emits full-height strips between holes and header/sill bands over
-    them — the multi-hole generalization of the synthetic builder's
-    axis-aligned wall_x_span."""
+    z; they must lie inside the panel but may share an s-range as long
+    as their z-ranges are disjoint.
+
+    Column sweep: the hole s-boundaries cut the panel into vertical
+    columns, and within each column the union of the holes spanning it
+    is subtracted from the full height, leaving the complementary
+    bands. Walking holes left-to-right instead — emitting a header and
+    a sill per hole — is the obvious approach and is wrong as soon as
+    two openings stack: the lower one's header spans from its head to
+    the roof and fills in the upper one, which then silently does not
+    exist. That case is not hypothetical here; the excavation report
+    repeatedly puts a light aperture directly above a niche."""
     p0 = np.asarray(p0, float)
     u = np.asarray(p1, float) - p0
     L = float(np.linalg.norm(u))
@@ -88,14 +144,77 @@ def wall_panel(p0, p1, zb, zt, verts, faces, holes=()):
         rect((a[0], a[1], z0a), (b[0], b[1], z0b),
              (b[0], b[1], z1b), (a[0], a[1], z1a), verts, faces)
 
-    s_prev = 0.0
-    for s0, s1, z_lo, z_hi in holes:
-        band(s_prev, s0, zb_at(s_prev), zb_at(s0),
-             zt_at(s_prev), zt_at(s0))
-        band(s0, s1, z_hi, z_hi, zt_at(s0), zt_at(s1))    # header
-        band(s0, s1, zb_at(s0), zb_at(s1), z_lo, z_lo)    # sill band
-        s_prev = s1
-    band(s_prev, L, zb_at(s_prev), zb_at(L), zt_at(s_prev), zt_at(L))
+    # Clamp the cuts into the panel: a wall shorter than its own
+    # opening (the registry has a few, where the nudge bounds cross)
+    # yields an s outside [0, L], and an unclamped cut would emit a
+    # band hanging off the end of the wall.
+    cuts = sorted({0.0, L} | {min(max(s, 0.0), L)
+                              for h in holes for s in h[:2]})
+    for c0, c1 in zip(cuts, cuts[1:]):
+        if c1 - c0 <= 1e-9:
+            continue
+        mid = 0.5 * (c0 + c1)
+        spans = sorted((z_lo, z_hi) for s0, s1, z_lo, z_hi in holes
+                       if s0 - 1e-9 <= mid <= s1 + 1e-9)
+        # Merge the column's occluded z-intervals, then emit what is
+        # left between the base and the top.
+        merged = []
+        for lo, hi in spans:
+            if merged and lo <= merged[-1][1] + 1e-9:
+                merged[-1][1] = max(merged[-1][1], hi)
+            else:
+                merged.append([lo, hi])
+        bands, z = [], None
+        for lo, hi in merged:
+            bands.append((zb_at(c0), zb_at(c1), lo, lo) if z is None
+                         else (z, z, lo, lo))
+            z = hi
+        bands.append((zb_at(c0), zb_at(c1), zt_at(c0), zt_at(c1))
+                     if z is None else (z, z, zt_at(c0), zt_at(c1)))
+        # Top band first, then the rest bottom-up. Any order builds the
+        # same surface, but this one reproduces the previous
+        # header-then-sill emission exactly, which keeps the frozen
+        # mesh hashes a usable regression gate for everything after it.
+        for quad in [bands[-1]] + bands[:-1]:
+            band(c0, c1, *quad)
+
+
+def rects_overlap(a, b, tol=0.01):
+    """Do two (s0, s1, z_lo, z_hi) wall rectangles share area?
+
+    `tol` in metres: openings that merely touch at an edge are a
+    digitizing artifact, not a conflict."""
+    a0, a1, az0, az1 = a
+    b0, b1, bz0, bz1 = b
+    return (min(a1, b1) - max(a0, b0) > tol
+            and min(az1, bz1) - max(az0, bz0) > tol)
+
+
+def reveal(a_out, b_out, n_dir, depth, zl, zh, verts, faces,
+           sill_z=None, cap=False):
+    """The returns around one opening: two jambs, a head soffit, and
+    optionally a sill and a back panel.
+
+    A door's reveal and a niche's recess are the same four surfaces —
+    the door's runs the full wall thickness and opens onto the far
+    side, the niche's stops short and is closed by a back panel. Shared
+    so the two cannot drift apart, and so a recess is never silently
+    built as a hole. `n_dir` is the unit direction the opening recedes
+    along (into the wall), `depth` how far."""
+    a_in = a_out + n_dir * depth
+    b_in = b_out + n_dir * depth
+    rect((a_out[0], a_out[1], zl), (a_in[0], a_in[1], zl),
+         (a_in[0], a_in[1], zh), (a_out[0], a_out[1], zh), verts, faces)
+    rect((b_out[0], b_out[1], zl), (b_in[0], b_in[1], zl),
+         (b_in[0], b_in[1], zh), (b_out[0], b_out[1], zh), verts, faces)
+    rect((a_out[0], a_out[1], zh), (b_out[0], b_out[1], zh),
+         (b_in[0], b_in[1], zh), (a_in[0], a_in[1], zh), verts, faces)
+    if sill_z is not None and zl > sill_z + 0.05:
+        rect((a_out[0], a_out[1], zl), (b_out[0], b_out[1], zl),
+             (b_in[0], b_in[1], zl), (a_in[0], a_in[1], zl), verts, faces)
+    if cap:
+        rect((a_in[0], a_in[1], zl), (b_in[0], b_in[1], zl),
+             (b_in[0], b_in[1], zh), (a_in[0], a_in[1], zh), verts, faces)
 
 
 def ear_clip(ring):
@@ -135,7 +254,7 @@ def ear_clip(ring):
 
 
 def build_building_mesh(walls, holes_by_wall, ground_z, plane,
-                        thickness, dome_row=None):
+                        thickness, dome_row=None, recess_by_wall=None):
     """All triangles for one building. Returns (verts, faces, stats).
 
     `ground_z(pts)` samples the bare DEM; `plane(x, y)` evaluates the
@@ -144,10 +263,19 @@ def build_building_mesh(walls, holes_by_wall, ground_z, plane,
     half a thickness at both ends so corners overlap instead of
     leaking (overlap is invisible to an any-hit occlusion test).
     `thickness=0` builds single-face walls (the circular-footprint
-    fallback)."""
+    fallback).
+
+    `holes_by_wall` perforates: [(s0, s1, z_lo, z_hi)]. `recess_by_wall`
+    does not: [(s0, s1, z_lo, z_hi, depth, face)] with face in
+    {"in", "out"} — a niche or apse, cut into one face and closed by a
+    back panel, so a sightline stops in it instead of passing through.
+    Keeping the two apart here is what stops an interior feature from
+    silently becoming a window."""
     verts, faces = [], []
     embed = 0.3               # sink bases below grade: no daylight gaps
     hole_area = 0.0
+    recess_area = 0.0
+    recess_by_wall = recess_by_wall or {}
     for wi, (p0, p1) in enumerate(walls):
         p0 = np.asarray(p0, float)
         p1 = np.asarray(p1, float)
@@ -158,7 +286,12 @@ def build_building_mesh(walls, holes_by_wall, ground_z, plane,
         zb = tuple(float(z) - embed for z in ground_z([p0, p1]))
         zt = (plane(*p0), plane(*p1))
         holes = holes_by_wall.get(wi, [])
-        wall_panel(p0, p1, zb, zt, verts, faces, holes)
+        # A zero-thickness wall is a single sheet with no depth to
+        # recess into, so recesses there are dropped by the caller.
+        recs = recess_by_wall.get(wi, []) if thickness > 0 else []
+        out_cut = holes + [(s0, s1, zl, zh) for s0, s1, zl, zh, _, f
+                           in recs if f == "out"]
+        wall_panel(p0, p1, zb, zt, verts, faces, sorted(out_cut))
         hole_area += sum((s1 - s0) * (zh - zl)
                          for s0, s1, zl, zh in holes)
         if thickness > 0:
@@ -169,31 +302,29 @@ def build_building_mesh(walls, holes_by_wall, ground_z, plane,
             # Holes carry over at the same s: the inner wall is a
             # translate, but its parametrization starts one thickness
             # earlier, so shift s by +thickness.
+            in_cut = holes + [(s0, s1, zl, zh) for s0, s1, zl, zh, _, f
+                              in recs if f == "in"]
             holes_in = [(s0 + thickness, s1 + thickness, zl, zh)
-                        for s0, s1, zl, zh in holes]
+                        for s0, s1, zl, zh in sorted(in_cut)]
             wall_panel(q0, q1, zbq, ztq, verts, faces, holes_in)
             hole_area += sum((s1 - s0) * (zh - zl)
-                             for s0, s1, zl, zh in holes_in)
+                             for s0, s1, zl, zh in holes)
             for s0, s1, zl, zh in holes:        # door reveals
                 a_out = p0 + u * s0
                 b_out = p0 + u * s1
-                a_in = a_out + n_in * thickness
-                b_in = b_out + n_in * thickness
-                rect((a_out[0], a_out[1], zl), (a_in[0], a_in[1], zl),
-                     (a_in[0], a_in[1], zh), (a_out[0], a_out[1], zh),
-                     verts, faces)
-                rect((b_out[0], b_out[1], zl), (b_in[0], b_in[1], zl),
-                     (b_in[0], b_in[1], zh), (b_out[0], b_out[1], zh),
-                     verts, faces)
-                rect((a_out[0], a_out[1], zh), (b_out[0], b_out[1], zh),
-                     (b_in[0], b_in[1], zh), (a_in[0], a_in[1], zh),
-                     verts, faces)              # header soffit
                 zg = float(ground_z([(a_out + b_out) / 2])[0])
-                if zl > zg + 0.05:
-                    rect((a_out[0], a_out[1], zl),
-                         (b_out[0], b_out[1], zl),
-                         (b_in[0], b_in[1], zl),
-                         (a_in[0], a_in[1], zl), verts, faces)
+                reveal(a_out, b_out, n_in, thickness, zl, zh,
+                       verts, faces, sill_z=zg)
+            for s0, s1, zl, zh, d, f in recs:
+                # The opening sits on whichever face it is cut into and
+                # recedes toward the other one.
+                base = (p0 if f == "out" else
+                        p0 + n_in * thickness)
+                a_out = base + u * s0
+                b_out = base + u * s1
+                reveal(a_out, b_out, n_in if f == "out" else -n_in,
+                       d, zl, zh, verts, faces, cap=True)
+                recess_area += (s1 - s0) * (zh - zl)
 
     ring = [w[0] for w in walls]
     for i, j, l in ear_clip(ring):
@@ -210,7 +341,7 @@ def build_building_mesh(walls, holes_by_wall, ground_z, plane,
              verts, faces)
 
     return (np.asarray(verts, float), np.asarray(faces, np.int64),
-            {"hole_area": hole_area})
+            {"hole_area": hole_area, "recess_area": recess_area})
 
 
 def plane_fit(geom, elevation, ground_z):
@@ -323,6 +454,100 @@ def self_test():
           "self-test: blank-wall first hit at the facade",
           f"{d2[0]:.4f} vs 10.0000 m")
 
+    # --- interior features -------------------------------------------
+    # A niche must NOT perforate. This is the direct regression test for
+    # the bug the kind gate exists to prevent: before it, every registry
+    # row cut a hole, so an interior niche would have opened a window
+    # through the wall and inflated the aperture effect being measured.
+    def scene_for(v, f):
+        sc = HybridScene.__new__(HybridScene)
+        t = v[f]
+        bb = np.stack([t.reshape(-1, 3).min(0), t.reshape(-1, 3).max(0)])
+        HybridScene.__init__(sc, HeightfieldScene(
+            dem, tf, None, select_device()), [(t, bb)])
+        return sc
+
+    nd = 0.15
+    recs = {south: [(s_mid - 0.3, s_mid + 0.3, gz + 1.0, gz + 1.6,
+                     nd, "in")]}
+    v_n, f_n, st_n = build_building_mesh(
+        walls, {}, ground_z, lambda x, y: gz + 4.0, th,
+        recess_by_wall=recs)
+    check(st_n["hole_area"] == 0.0 and st_n["recess_area"] > 0,
+          "self-test: niche books as recess, not hole",
+          f"hole {st_n['hole_area']:.4f}, recess "
+          f"{st_n['recess_area']:.4f}")
+    sc_n = scene_for(v_n, f_n)
+    check(not sc_n.is_visible(eye, (cx, cy, gz + 1.3)),
+          "self-test: niche does not perforate the wall")
+
+    # An on-axis recess is a dead end: the ray stops at its back panel,
+    # one niche-depth short of where the bare wall face would be.
+    recs_axis = {south: [(s_mid - 0.3, s_mid + 0.3, gz + 1.0, gz + 1.6,
+                          nd, "out")]}
+    v_a, f_a, _ = build_building_mesh(
+        walls, {}, ground_z, lambda x, y: gz + 4.0, th,
+        recess_by_wall=recs_axis)
+    d3 = scene_for(v_a, f_a).first_hit(
+        (cx, cy - half - 10.0, gz + 1.3), np.array([0.0]),
+        np.array([1.0]), np.array([0.0]))
+    check(abs(d3[0] - (10.0 + nd)) < 1e-3,
+          "self-test: outward recess deepens the first hit by its depth",
+          f"{d3[0]:.4f} vs {10.0 + nd:.4f} m")
+
+    # Two openings sharing an s-span but not a z-span — the light
+    # aperture above a niche the report keeps describing. The old
+    # left-to-right panel walk filled the upper one in; the column
+    # sweep must keep both.
+    stacked = {south: [(s_mid - 0.3, s_mid + 0.3, gz + 0.2, gz + 0.8),
+                       (s_mid - 0.3, s_mid + 0.3, gz + 1.6, gz + 2.2)]}
+    v_s, f_s, st_s = build_building_mesh(
+        walls, stacked, ground_z, lambda x, y: gz + 4.0, th)
+    check(abs(st_s["hole_area"] - 2 * 2 * 0.6 * 0.6) < 1e-9,
+          "self-test: stacked openings both cut",
+          f"{st_s['hole_area']:.4f} vs {2 * 2 * 0.6 * 0.6:.4f}")
+    sc_s = scene_for(v_s, f_s)
+    check(sc_s.is_visible((cx, cy - half - 10.0, gz + 1.9),
+                          (cx, cy, gz + 1.9)),
+          "self-test: upper stacked opening is open")
+    check(not sc_s.is_visible((cx, cy - half - 10.0, gz + 1.2),
+                              (cx, cy, gz + 1.2)),
+          "self-test: solid band between stacked openings blocks")
+
+    # Overlap detection, both axes.
+    check(rects_overlap((0, 1, 0, 1), (0.5, 1.5, 0.5, 1.5)),
+          "self-test: overlapping rects detected")
+    check(not rects_overlap((0, 1, 0, 1), (0, 1, 1.5, 2.5)),
+          "self-test: same span, disjoint heights allowed")
+    check(not rects_overlap((0, 1, 0, 1), (2, 3, 0, 1)),
+          "self-test: disjoint spans allowed")
+
+    # An unrecognised kind must fail rather than default to a hole.
+    # row_kind takes its checker as an argument, so pass a recording
+    # stub: the rejection is what's under test, and routing it through
+    # the real check() would print a FAIL and register a failure for
+    # behaviour that is correct.
+    seen = []
+    bad = row_kind({"ID": 0, "ap_id": 0, "kind": "buttress"},
+                   lambda ok, label, detail="": seen.append(bool(ok)))
+    check(bad is None and seen == [False],
+          "self-test: unknown kind is rejected, not defaulted",
+          f"returned {bad!r}, checker saw {seen}")
+
+    # Thinner walls admit a wider cone through the same door.
+    fan = np.linspace(-0.9, 0.9, 361)
+    seen = {}
+    for t_wall in (0.40, 0.17):
+        v_t, f_t, _ = build_building_mesh(
+            walls, holes, ground_z, lambda x, y: gz + 4.0, t_wall)
+        sc_t = scene_for(v_t, f_t)
+        tgt = np.column_stack([cx + fan, np.full(fan.size, cy),
+                               np.full(fan.size, gz + 1.0)])
+        seen[t_wall] = int(sc_t.visible_mask(eye, tgt).sum())
+    check(seen[0.17] > seen[0.40],
+          "self-test: thinner wall admits a wider cone",
+          f"0.17 m: {seen[0.17]} rays vs 0.40 m: {seen[0.40]}")
+
 
 def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
@@ -338,7 +563,24 @@ def build_parser():
     p.add_argument("--no-domes", action="store_true",
                    help="skip dome caps in the meshes")
     p.add_argument("--thickness", type=float, default=0.4,
-                   help="wall thickness (m); doors get real reveals")
+                   help="uniform wall thickness (m); doors get real "
+                        "reveals. Used for every building unless "
+                        "--thickness-mode fabric")
+    p.add_argument("--fabric", type=Path, default=BUILDING_FABRIC,
+                   help="per-building wall fabric CSV, read only when "
+                        "--thickness-mode fabric")
+    p.add_argument("--thickness-mode", choices=THICKNESS_MODES,
+                   default="legacy",
+                   help="legacy = one --thickness for every building, "
+                        "the published baseline; fabric = per-building "
+                        "measured or typology-derived thickness")
+    p.add_argument("--thin-rule", choices=THICKNESS_MODES,
+                   default="legacy",
+                   help="which thickness decides the zero-thickness "
+                        "fallback. Pinning it to legacy keeps the same "
+                        "buildings solid, so a fabric run's delta is "
+                        "thickness alone and not a change of "
+                        "representation")
     p.add_argument("--ids", type=int, nargs="+",
                    help="build only these building ids")
     p.add_argument("--out-dir", type=Path,
@@ -352,11 +594,20 @@ def build_parser():
     p.add_argument("--default-sill", type=float, default=DOOR_SILL,
                    help="sill height (m) for rows with a blank sill_m")
     p.add_argument("--no-openings", action="store_true",
-                   help="build the SAME geometry with every opening "
-                        "omitted — the doorless control. Comparing "
-                        "against plain extruded blocks instead would "
-                        "confound apertures with the roof planes and "
-                        "dome caps these meshes also add")
+                   help="alias for --openings none: build the SAME "
+                        "geometry with every opening omitted — the "
+                        "doorless control. Comparing against plain "
+                        "extruded blocks instead would confound "
+                        "apertures with the roof planes and dome caps "
+                        "these meshes also add")
+    p.add_argument("--openings", choices=OPENING_MODES, default="doors",
+                   help="which registry rows to build. none = the "
+                        "doorless control; doors = doors only (the "
+                        "published baseline); perforating = doors and "
+                        "windows; all = also niches and apses as "
+                        "recesses. Kept as a mode rather than a "
+                        "boolean so the doorless control keeps its "
+                        "exact meaning as new kinds are added")
     p.add_argument("--calibrate", action="store_true",
                    help="print measured-opening stats "
                         "(source_dims=plate) and exit")
@@ -414,6 +665,17 @@ def main():
     if missing:
         sys.exit(1)
 
+    # --no-openings predates --openings and is load-bearing: the
+    # doorless control and compare_apertures' mesh-dir naming both use
+    # it. Keep it as an alias rather than redefining it.
+    openings_mode = "none" if args.no_openings else args.openings
+    print(f"  openings: {openings_mode}")
+
+    fabric = (load_fabric(args.fabric, check, warn)
+              if args.thickness_mode == "fabric" else None)
+    print(f"  thickness: {args.thickness_mode} "
+          f"(thin rule: {args.thin_rule})")
+
     args.out_dir.mkdir(parents=True, exist_ok=True)
     dem_src = rasterio.open(args.dem)
 
@@ -439,59 +701,87 @@ def main():
 
         # Zero-thickness fallback: circular footprints (densified
         # rings) and buildings too small for a 3x-thickness core.
-        n_orig = len(largest_poly(geom).exterior.coords)
-        thin = (n_orig > 30 or largest_poly(geom).buffer(
-            -3 * args.thickness).is_empty)
-        th = 0.0 if thin else args.thickness
+        # Which thickness decides that is a separate choice from which
+        # thickness gets built, so a fabric run can be compared against
+        # legacy without the two effects riding on each other.
+        nominal = (fabric.get(bid, args.thickness) if fabric
+                   else args.thickness)
+        rule_t = args.thickness if args.thin_rule == "legacy" else nominal
+        th = built_thickness(geom, nominal, rule_t)
+        thin = th == 0.0
         if thin:
             warn(f"ID {bid} built zero-thickness",
                  "circular or too small for wall offsetting")
 
-        holes_by_wall, srcs = {}, set()
+        holes_by_wall, recess_by_wall, srcs = {}, {}, set()
         ok_rows = True
         for r in sorted(by_id[bid], key=lambda r: (int(r["wall"]),
                                                    float(r["s_m"]))):
+            kind = row_kind(r, check)
+            if kind is None:
+                ok_rows = False
+                continue
+            perforates = row_perforates(r, kind)
+            if openings_mode == "doors" and kind != "door":
+                continue
+            if openings_mode == "perforating" and not perforates:
+                continue
             wi = resolve_wall(walls, r, check, warn)
             if wi is None:
                 ok_rows = False
                 continue
             p0, p1 = walls[wi]
-            L = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
-            w = (float(r["width_m"]) if r.get("width_m", "") != ""
-                 else args.default_door_width)
-            sill = (float(r["sill_m"]) if r.get("sill_m", "") != ""
-                    else args.default_sill)
-            head = (float(r["head_m"]) if r.get("head_m", "") != ""
-                    else args.default_door_head)
-            s = min(max(float(r["s_m"]), w / 2 + 0.05),
-                    L - w / 2 - 0.05)
-            if abs(s - float(r["s_m"])) > 0.01:
-                warn(f"ID {bid} ap {r['ap_id']} opening nudged "
-                     "inside its wall", f"s {r['s_m']} -> {s:.2f}")
-            hx, hy = (p0[0] + (p1[0] - p0[0]) * s / L,
-                      p0[1] + (p1[1] - p0[1]) * s / L)
-            zg = float(ground_z([(hx, hy)])[0])
-            z_top = plane(hx, hy)
-            z_hi = min(zg + head, z_top - 0.1)
-            if z_hi < zg + head:
-                warn(f"ID {bid} ap {r['ap_id']} head clipped below "
-                     "roofline", f"{zg + head:.2f} -> {z_hi:.2f}")
-            holes_by_wall.setdefault(wi, []).append(
-                (s - w / 2, s + w / 2, zg + sill, z_hi))
+            rect_sz = opening_rect(p0, p1, r, ground_z, plane,
+                                   args.default_door_width,
+                                   args.default_sill,
+                                   args.default_door_head, warn)
+            if perforates:
+                holes_by_wall.setdefault(wi, []).append(rect_sz)
+            elif th <= 0:
+                warn(f"ID {bid} ap {r['ap_id']}: recess dropped",
+                     "zero-thickness wall has no depth to recess into")
+            else:
+                depth = row_depth(r, kind, th, warn)
+                recess_by_wall.setdefault(wi, []).append(
+                    (*rect_sz, depth, row_face(r, kind)))
             srcs.add(r.get("source_dims", ""))
-        for wi, hs in holes_by_wall.items():
-            hs.sort()
-            for (a0, a1, *_), (b0, b1, *_) in zip(hs, hs[1:]):
-                if b0 < a1:
-                    check(False, f"ID {bid} wall {wi} openings overlap",
-                          f"{a0:.2f}-{a1:.2f} vs {b0:.2f}-{b1:.2f}")
-                    ok_rows = False
+        # Openings compete for wall surface in BOTH axes. Comparing only
+        # adjacent pairs after sorting by s misses a fully-nested pair,
+        # and comparing only s rejects the arrangement the excavation
+        # report describes most often — a light aperture directly above
+        # a niche, same span, different heights. All-pairs over s x z;
+        # k is at most a handful per wall, so the cost is nil.
+        for wi in set(holes_by_wall) | set(recess_by_wall):
+            marks = ([(*h, None, "through") for h in holes_by_wall.get(wi, [])]
+                     + list(recess_by_wall.get(wi, [])))
+            for i, a in enumerate(marks):
+                for b in marks[i + 1:]:
+                    if not rects_overlap(a[:4], b[:4]):
+                        continue
+                    if a[5] != b[5] or "through" in (a[5], b[5]):
+                        check(False,
+                              f"ID {bid} wall {wi}: openings overlap",
+                              f"{a[5]} {a[0]:.2f}-{a[1]:.2f}"
+                              f"/{a[2]:.2f}-{a[3]:.2f} vs {b[5]} "
+                              f"{b[0]:.2f}-{b[1]:.2f}/{b[2]:.2f}-{b[3]:.2f}")
+                        ok_rows = False
+                    elif a[4] + b[4] >= th - 1e-9:
+                        # Back-to-back recesses that meet through the
+                        # wall are a hole, which is the one thing this
+                        # gate exists to prevent.
+                        check(False,
+                              f"ID {bid} wall {wi}: opposed recesses "
+                              "meet through the wall",
+                              f"{a[4]:.2f} + {b[4]:.2f} >= {th:.2f} m")
+                        ok_rows = False
         if not ok_rows:
             continue
 
-        verts, faces, stats = build_building_mesh(
-            walls, {} if args.no_openings else holes_by_wall,
-            ground_z, plane, th, dome_rows.get(bid))
+        build_holes = {} if openings_mode == "none" else holes_by_wall
+        build_recs = recess_by_wall if openings_mode == "all" else {}
+        verts, faces, _ = build_building_mesh(
+            walls, build_holes, ground_z, plane, th,
+            dome_rows.get(bid), recess_by_wall=build_recs)
         areas = tri_areas(verts, faces)
         check(bool((areas > 1e-9).all()),
               f"ID {bid}: no degenerate triangles",
