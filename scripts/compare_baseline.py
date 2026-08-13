@@ -85,8 +85,15 @@ def load_backdrop(ortho_path, scene):
     if ortho_path.exists():
         with rasterio.open(ortho_path) as src:
             a = src.read()
+            ortho_nodata = src.nodata
         img = (np.transpose(a[:3], (1, 2, 0)) if a.shape[0] >= 3
                else a[0]).astype("float64")
+        if ortho_nodata is not None:
+            # Otherwise a nodata sentinel (e.g. -1e6 at a crop's raw
+            # edge) drags the 2nd-percentile stretch bound down with
+            # it, washing every real pixel out toward white instead of
+            # showing the actual orthophoto contrast.
+            img = np.where(img == ortho_nodata, np.nan, img)
         lo, hi = np.nanpercentile(img, [2, 98])
         return np.clip((img - lo) / max(hi - lo, 1e-9), 0, 1)
     from build_dem_with_buildings import hillshade
@@ -168,7 +175,7 @@ def main():
     print(f"DEVICE: {device}   surface: {args.dem.name}")
     print("=" * 70)
 
-    dem, transform, crs, nodata, profile = load_dem(args.dem)
+    dem, transform, crs, nodata, _ = load_dem(args.dem)
     scene = HeightfieldScene(dem, transform, nodata, device)
 
     obs_list, _ = load_observers(args.observers, crs)
