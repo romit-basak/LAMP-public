@@ -1,6 +1,6 @@
 """Cut measurable per-chapel tiles from the excavation report's figures.
 
-Chapter III pairs about forty chapels with a drawn plan, and half of
+Chapter VII pairs about forty chapels with a drawn plan, and half of
 those with a section or facade elevation as well. Those drawings are
 the only place in the whole dataset where a doorway is drawn *to size*
 in both axes: the site CAD measures three doors and states no height
@@ -70,7 +70,7 @@ OUT_DIR = APERTURES_DIR / "plate_figures"
 INDEX_COLS = ["ID", "fig_no", "page", "rotate", "x0", "y0", "x1", "y1",
               "px_per_m", "bar_m", "drawn", "confidence", "notes"]
 
-# Chapter III and the typology chapter carry the architectural figures;
+# Chapter VII and the typology chapter carry the architectural figures;
 # everything outside this span is painted decoration or photo plates.
 DEFAULT_PAGES = (88, 170)
 
@@ -132,7 +132,7 @@ def drawing_blocks(ink, min_span=0.03, dilate=0.025, min_frac=0.012):
         return []
     r = max(2, int(dilate * max(h, w)))
     grown = ndimage.binary_dilation(big, np.ones((r, r), bool))
-    lab2, n2 = ndimage.label(grown)
+    lab2, _ = ndimage.label(grown)
     out = []
     for i, sl in enumerate(ndimage.find_objects(lab2), start=1):
         # Box the *undilated* ink inside each cluster: subtracting the
@@ -164,7 +164,7 @@ def find_scale_bars(ink):
     Deliberately run over the whole page rather than inside a figure
     box: a box that clips the bar by even a few pixels destroys the
     end rule and with it the tick spacing."""
-    lab, n = ndimage.label(ink)
+    lab, _ = ndimage.label(ink)
     found = []
     for i, sl in enumerate(ndimage.find_objects(lab), start=1):
         bh = sl[0].stop - sl[0].start

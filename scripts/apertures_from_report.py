@@ -1,6 +1,6 @@
 """Turn stated entrance directions into aperture-registry rows.
 
-The excavation report's Chapter III describes every chapel and states
+The excavation report's Chapter VII describes every chapel and states
 which way it opens ("(228) No. 228 is a good example of Type 4; it
 opens west..."). That is the authoritative aperture source: the site
 plan's linework turned out to encode door *positions* far too weakly
@@ -116,7 +116,7 @@ def main():
         n = seed_from_xlsx(args.xlsx, args.directions)
         print(f"  seeded {args.directions.name} from the spreadsheet "
               f"({n} chapels with a stated direction) — add rows as you "
-              f"read the report's Chapter III")
+              f"read the report's Chapter VII")
 
     fp = gpd.read_file(args.footprints)
     by_id = {int(r["ID"]): r.geometry for _, r in fp.iterrows()}

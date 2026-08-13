@@ -338,7 +338,7 @@ memory-mapped hand extraction) plus browsable contact sheets and a
 `plate_index.csv` template. *Manual workflow*: browse the contact
 sheets → open the full-res `page_NNN.jpg` → read door sill/head/width
 off the plate's dimension lines → edit the registry row
-(`source_dims=plate`, note the page number). Chapter III's per-chapel
+(`source_dims=plate`, note the page number). Chapter VII's per-chapel
 descriptions start around p.88.
 
 **`extract_site_cad.py`** is the *measured* aperture source, and takes
@@ -354,7 +354,7 @@ tested against the report's stated directions they agree 36% against a
 ~25% chance baseline.
 
 **`read_report_directions.py`** is the site-wide aperture source. It
-OCRs Chapter III (`tesseract`, ~2.3 s/page, cached to
+OCRs Chapter VII (`tesseract`, ~2.3 s/page, cached to
 `report_plates/ocr/`) and pulls each chapel's stated entrance
 direction from sentences like *"A chapel of Type 1 which opens
 south"*, keeping the quote and book page for audit. **186 of 263

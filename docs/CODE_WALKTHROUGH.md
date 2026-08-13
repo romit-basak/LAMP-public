@@ -1396,7 +1396,7 @@ footprint corners, and the one chapel we ground-truthed (180) has
 *unbroken* linework across its real entrance. The report, meanwhile,
 simply says so in words — "(212) A chapel of Type 1 which opens
 south" — for 186 of 263 chapels. `read_report_directions.py` OCRs
-Chapter III with tesseract (psm 3, which keeps the centred `(NNN)`
+Chapter VII with tesseract (psm 3, which keeps the centred `(NNN)`
 headings on their own lines where psm 6 swallows them), splits into
 per-chapel entries, and matches direction phrases anchored on
 opens/entrance/faces so that a passing mention ("niches in the east,

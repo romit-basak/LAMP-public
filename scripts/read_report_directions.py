@@ -1,7 +1,7 @@
 """OCR the excavation report's per-chapel descriptions for entrance
 directions.
 
-Chapter III ("A brief description of all the chapels") walks the
+Chapter VII ("A brief description of all the chapels") walks the
 chapels in numeric order, each under a bold `(NNN)` heading, and
 states which way it opens in plain words:
 
@@ -42,7 +42,7 @@ from aperture_registry import APERTURES_DIR
 PLATES = APERTURES_DIR / "report_plates"
 # Page-number offset drifts through the book (unnumbered plates are
 # interleaved), so the book page is read off each scan rather than
-# computed; this is only the search default for Chapter III.
+# computed; this is only the search default for Chapter VII.
 DEFAULT_RANGE = (96, 176)
 
 # OCR drops a bracket often enough to matter (chapel 9's heading comes
@@ -163,7 +163,7 @@ def build_parser():
                    help="folder of page_NNN.jpg scans")
     p.add_argument("--pages", type=int, nargs=2, default=DEFAULT_RANGE,
                    metavar=("FIRST", "LAST"),
-                   help="PDF page range to OCR (Chapter III)")
+                   help="PDF page range to OCR (Chapter VII)")
     p.add_argument("--out", type=Path,
                    default=APERTURES_DIR / "report_directions.csv",
                    help="extracted directions table")
