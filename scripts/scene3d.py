@@ -389,7 +389,7 @@ def main():
     from viewshed import HeightfieldScene, select_device, load_dem
 
     device = select_device()
-    dem, transform, crs, nodata, _ = load_dem(args.assets / "flat_dem.tif")
+    dem, transform, _, nodata, _ = load_dem(args.assets / "flat_dem.tif")
     base = HeightfieldScene(dem, transform, nodata, device)
     print("=" * 70)
     print(f"SCENE3D SELF-CHECKS   device: {device}   assets: {args.assets}")
