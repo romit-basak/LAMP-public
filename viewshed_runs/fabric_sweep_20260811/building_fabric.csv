@@ -1,0 +1,264 @@
+ID,type,wall_thickness_m,thickness_source,thickness_conf,n_probes,spread_m,notes
+1,4,0.35,cad,high,3212,0.01,Building1.dxf
+2,1,0.17,report_type,med,0,,Type 1 as defined in the report
+3,1,0.17,report_type,med,0,,Type 1 as defined in the report
+4,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+5,1,0.17,report_type,med,0,,Type 1 as defined in the report
+6,1,0.17,report_type,med,0,,Type 1 as defined in the report
+7,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+8,1,0.17,report_type,med,0,,Type 1 as defined in the report
+9,8,0.405,type_cad,low,0,,median of 2 measured Type 8 chapel(s)
+10,2,0.39,site_default,low,0,,median of all measured chapels
+11,1,0.17,report_type,med,0,,Type 1 as defined in the report
+12,1,0.17,report_type,med,0,,Type 1 as defined in the report
+13,1,0.17,report_type,med,0,,Type 1 as defined in the report
+14,1,0.17,report_type,med,0,,Type 1 as defined in the report
+15,1,0.17,report_type,med,0,,Type 1 as defined in the report
+16,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+17,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+18,1,0.17,report_type,med,0,,Type 1 as defined in the report
+19,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+20,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+21,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+22,1,0.17,report_type,med,0,,Type 1 as defined in the report
+23,8,0.39,cad,high,669,0.11,Building23.dxf
+24,8,0.405,type_cad,low,0,,median of 2 measured Type 8 chapel(s)
+25,8,0.42,cad,high,547,0.03,Building25.dxf
+26,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+27,1,0.17,report_type,med,0,,Type 1 as defined in the report
+28,1,0.17,report_type,med,0,,Type 1 as defined in the report
+29,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+30,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+31,2,0.39,site_default,low,0,,median of all measured chapels
+32,1,0.17,report_type,med,0,,Type 1 as defined in the report
+33,1,0.17,report_type,med,0,,Type 1 as defined in the report
+34,1,0.17,report_type,med,0,,Type 1 as defined in the report
+35,1,0.17,report_type,med,0,,Type 1 as defined in the report
+36,1,0.17,report_type,med,0,,Type 1 as defined in the report
+37,5,0.39,site_default,low,0,,median of all measured chapels
+38,1,0.17,report_type,med,0,,Type 1 as defined in the report
+39,,0.39,site_default,low,0,,median of all measured chapels
+40,1,0.17,report_type,med,0,,Type 1 as defined in the report
+41,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+42,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+43,1,0.17,report_type,med,0,,Type 1 as defined in the report
+44,1,0.17,report_type,med,0,,Type 1 as defined in the report
+45,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+46,,0.39,site_default,low,0,,median of all measured chapels
+47,1,0.17,report_type,med,0,,Type 1 as defined in the report
+48,,0.39,site_default,low,0,,median of all measured chapels
+49,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+50,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+51,1,0.17,report_type,med,0,,Type 1 as defined in the report
+52,5,0.39,site_default,low,0,,median of all measured chapels
+53,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+54,,0.39,site_default,low,0,,median of all measured chapels
+55,1,0.17,report_type,med,0,,Type 1 as defined in the report
+56,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+57,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+58,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+59,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+60,1,0.17,report_type,med,0,,Type 1 as defined in the report
+61,1,0.17,report_type,med,0,,Type 1 as defined in the report
+62,5,0.39,site_default,low,0,,median of all measured chapels
+63,1,0.17,report_type,med,0,,Type 1 as defined in the report
+64,1,0.17,report_type,med,0,,Type 1 as defined in the report
+65,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+66,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+67,1,0.17,report_type,med,0,,Type 1 as defined in the report
+68,1,0.17,report_type,med,0,,Type 1 as defined in the report
+69,7,0.39,site_default,low,0,,median of all measured chapels
+70,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+71,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+72,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+73,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+74,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+75,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+76,1,0.17,report_type,med,0,,Type 1 as defined in the report
+77,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+78,7,0.39,site_default,low,0,,median of all measured chapels
+79,1,0.17,report_type,med,0,,Type 1 as defined in the report
+80,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+81,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+82,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+83,,0.39,site_default,low,0,,median of all measured chapels
+84,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+85,1,0.17,report_type,med,0,,Type 1 as defined in the report
+86,,0.39,site_default,low,0,,median of all measured chapels
+87,,0.39,site_default,low,0,,median of all measured chapels
+88,5,0.39,site_default,low,0,,median of all measured chapels
+89,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+90,7,0.39,site_default,low,0,,median of all measured chapels
+91,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+92,1,0.17,report_type,med,0,,Type 1 as defined in the report
+93,1,0.17,report_type,med,0,,Type 1 as defined in the report
+94,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+95,1,0.17,report_type,med,0,,Type 1 as defined in the report
+96,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+97,1,0.17,report_type,med,0,,Type 1 as defined in the report
+98,1,0.17,report_type,med,0,,Type 1 as defined in the report
+99,1,0.17,report_type,med,0,,Type 1 as defined in the report
+100,,0.39,site_default,low,0,,median of all measured chapels
+101,1,0.17,report_type,med,0,,Type 1 as defined in the report
+102,1,0.17,report_type,med,0,,Type 1 as defined in the report
+103,1,0.17,report_type,med,0,,Type 1 as defined in the report
+104,2,0.39,site_default,low,0,,median of all measured chapels
+105,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+106,1,0.17,report_type,med,0,,Type 1 as defined in the report
+107,6,0.39,site_default,low,0,,median of all measured chapels
+108,1,0.17,report_type,med,0,,Type 1 as defined in the report
+109,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+110,1,0.17,report_type,med,0,,Type 1 as defined in the report
+111,8,0.405,type_cad,low,0,,median of 2 measured Type 8 chapel(s)
+112,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+113,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+114,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+115,6,0.39,site_default,low,0,,median of all measured chapels
+116,1,0.17,report_type,med,0,,Type 1 as defined in the report
+117,1,0.17,report_type,med,0,,Type 1 as defined in the report
+118,5,0.39,site_default,low,0,,median of all measured chapels
+119,1,0.17,report_type,med,0,,Type 1 as defined in the report
+120,,0.39,site_default,low,0,,median of all measured chapels
+121,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+122,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+123,1,0.17,report_type,med,0,,Type 1 as defined in the report
+124,1,0.17,report_type,med,0,,Type 1 as defined in the report
+125,1,0.17,report_type,med,0,,Type 1 as defined in the report
+126,1,0.17,report_type,med,0,,Type 1 as defined in the report
+127,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+128,1,0.17,report_type,med,0,,Type 1 as defined in the report
+129,1,0.17,report_type,med,0,,Type 1 as defined in the report
+130,3,0.39,site_default,low,0,,median of all measured chapels
+131,1,0.17,report_type,med,0,,Type 1 as defined in the report
+132,1,0.17,report_type,med,0,,Type 1 as defined in the report
+133,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+134,5,0.39,site_default,low,0,,median of all measured chapels
+135,1,0.17,report_type,med,0,,Type 1 as defined in the report
+136,1,0.17,report_type,med,0,,Type 1 as defined in the report
+137,1,0.17,report_type,med,0,,Type 1 as defined in the report
+138,1,0.17,report_type,med,0,,Type 1 as defined in the report
+139,1,0.17,report_type,med,0,,Type 1 as defined in the report
+140,1,0.17,report_type,med,0,,Type 1 as defined in the report
+141,1,0.17,report_type,med,0,,Type 1 as defined in the report
+142,1,0.17,report_type,med,0,,Type 1 as defined in the report
+143,1,0.17,report_type,med,0,,Type 1 as defined in the report
+144,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+145,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+146,1,0.17,report_type,med,0,,Type 1 as defined in the report
+147,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+148,,0.39,site_default,low,0,,median of all measured chapels
+149,1,0.17,report_type,med,0,,Type 1 as defined in the report
+150,6,0.39,site_default,low,0,,median of all measured chapels
+151,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+152,1,0.17,report_type,med,0,,Type 1 as defined in the report
+153,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+154,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+155,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+156,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+157,1,0.17,report_type,med,0,,Type 1 as defined in the report
+158,6,0.39,site_default,low,0,,median of all measured chapels
+159,,0.39,site_default,low,0,,median of all measured chapels
+160,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+161,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+162,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+163,,0.39,site_default,low,0,,median of all measured chapels
+164,1,0.17,report_type,med,0,,Type 1 as defined in the report
+165,1,0.17,report_type,med,0,,Type 1 as defined in the report
+166,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+167,5,0.39,site_default,low,0,,median of all measured chapels
+168,,0.39,site_default,low,0,,median of all measured chapels
+169,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+170,1,0.17,report_type,med,0,,Type 1 as defined in the report
+171,10,0.39,type_cad,low,0,,median of 1 measured Type 10 chapel(s)
+172,10,0.39,type_cad,low,0,,median of 1 measured Type 10 chapel(s)
+173,10,0.39,type_cad,low,0,,median of 1 measured Type 10 chapel(s)
+174,1,0.17,report_type,med,0,,Type 1 as defined in the report
+175,10,0.39,cad,high,633,0.0,Building175.dxf
+176,10,0.39,type_cad,low,0,,median of 1 measured Type 10 chapel(s)
+177,1,0.17,report_type,med,0,,Type 1 as defined in the report
+178,10,0.39,type_cad,low,0,,median of 1 measured Type 10 chapel(s)
+179,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+180,,0.39,site_default,low,0,,median of all measured chapels
+181,9,0.085,report_type,med,0,,Type 9 as defined in the report
+182,9,0.085,report_type,med,0,,Type 9 as defined in the report
+183,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+184,5,0.39,site_default,low,0,,median of all measured chapels
+185,1,0.17,report_type,med,0,,Type 1 as defined in the report
+186,9,0.085,report_type,med,0,,Type 9 as defined in the report
+187,1,0.17,report_type,med,0,,Type 1 as defined in the report
+188,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+189,1,0.17,report_type,med,0,,Type 1 as defined in the report
+190,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+191,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+192,6,0.39,site_default,low,0,,median of all measured chapels
+193,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+194,5,0.39,site_default,low,0,,median of all measured chapels
+195,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+196,1,0.17,report_type,med,0,,Type 1 as defined in the report
+197,1,0.17,report_type,med,0,,Type 1 as defined in the report
+198,1,0.17,report_type,med,0,,Type 1 as defined in the report
+199,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+200,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+201,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+202,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+203,1,0.17,report_type,med,0,,Type 1 as defined in the report
+204,1,0.17,report_type,med,0,,Type 1 as defined in the report
+205,3,0.39,site_default,low,0,,median of all measured chapels
+206,3,0.39,site_default,low,0,,median of all measured chapels
+207,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+208,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+209,1,0.17,report_type,med,0,,Type 1 as defined in the report
+210,4,0.28,cad,high,2050,0.04,Building210.dxf
+211,3,0.39,site_default,low,0,,median of all measured chapels
+212,1,0.17,report_type,med,0,,Type 1 as defined in the report
+213,6,0.39,site_default,low,0,,median of all measured chapels
+214,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+215,3,0.39,site_default,low,0,,median of all measured chapels
+216,1,0.17,report_type,med,0,,Type 1 as defined in the report
+217,1,0.17,report_type,med,0,,Type 1 as defined in the report
+218,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+219,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+220,1,0.17,report_type,med,0,,Type 1 as defined in the report
+221,1,0.17,report_type,med,0,,Type 1 as defined in the report
+222,1,0.17,report_type,med,0,,Type 1 as defined in the report
+223,8,0.405,type_cad,low,0,,median of 2 measured Type 8 chapel(s)
+224,7,0.39,site_default,low,0,,median of all measured chapels
+225,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+226,1,0.17,report_type,med,0,,Type 1 as defined in the report
+227,1,0.17,report_type,med,0,,Type 1 as defined in the report
+228,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+229,1,0.17,report_type,med,0,,Type 1 as defined in the report
+230,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+231,1,0.17,report_type,med,0,,Type 1 as defined in the report
+232,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+233,1,0.17,report_type,med,0,,Type 1 as defined in the report
+234,1,0.17,report_type,med,0,,Type 1 as defined in the report
+235,1,0.17,report_type,med,0,,Type 1 as defined in the report
+236,1,0.17,report_type,med,0,,Type 1 as defined in the report
+237,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+238,1,0.17,report_type,med,0,,Type 1 as defined in the report
+239,1,0.17,report_type,med,0,,Type 1 as defined in the report
+240,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+241,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+242,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+243,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+244,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+245,1,0.17,report_type,med,0,,Type 1 as defined in the report
+246,1,0.17,report_type,med,0,,Type 1 as defined in the report
+247,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+248,9,0.085,report_type,med,0,,Type 9 as defined in the report
+249,1,0.17,report_type,med,0,,Type 1 as defined in the report
+250,1,0.17,report_type,med,0,,Type 1 as defined in the report
+251,1,0.17,report_type,med,0,,Type 1 as defined in the report
+252,,0.39,site_default,low,0,,median of all measured chapels
+253,1,0.17,report_type,med,0,,Type 1 as defined in the report
+254,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+255,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+256,10,0.39,type_cad,low,0,,median of 1 measured Type 10 chapel(s)
+257,6,0.39,site_default,low,0,,median of all measured chapels
+258,4,0.315,type_cad,low,0,,median of 2 measured Type 4 chapel(s)
+259,3,0.39,site_default,low,0,,median of all measured chapels
+260,1,0.17,report_type,med,0,,Type 1 as defined in the report
+261,9,0.085,report_type,med,0,,Type 9 as defined in the report
+262,9,0.085,report_type,med,0,,Type 9 as defined in the report
+263,1,0.17,report_type,med,0,,Type 1 as defined in the report

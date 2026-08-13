@@ -1,0 +1,9 @@
+run                     cells  edges  centroid  vertex
+legacy_doorless        35,788    789         9      74
+legacy_apertured       35,905    789        12      76
+fabric_doorless        36,770    789         9      75
+fabric_apertured       36,907    789        12      77
+
+DOOR EFFECT (apertured - doorless), same thickness both sides
+  legacy  cells 35,788 -> 35,905 (+117 / +0.33%)   centroid 9 -> 12 (+3 / +33%)
+  fabric  cells 36,770 -> 36,907 (+137 / +0.37%)   centroid 9 -> 12 (+3 / +33%)
