@@ -497,12 +497,17 @@ def main():
             "problem: for a meshed building it evaluates centroid "
             "visibility through `HybridScene.surface_z`, which forwards "
             "to the flattened base scene — the true interior floor "
-            "height, not the roof. That is the tool that already found "
-            "a real, positive effect in the site-wide 0.4 m run "
-            "(`PROGRESS.md`, 2026-08-08): **+115 ground cells / +0.28%** "
-            "over 197 buildings and 4 observers, and **+23% "
-            "centroid-visible building pairs**. That graph result, not "
-            "this raster delta, is the correct aperture evidence.\n")
+            "height, not the roof. That is the tool that finds a real, "
+            "positive effect, on the site-wide 0.4 m graded run "
+            "(`PROGRESS.md`, 2026-08-14; 202 meshed chapels, 3 "
+            "observers, 789 building-observer pairs, matched building "
+            "set at every step): solid 36,520 ground cells and 8 "
+            "centroid-visible pairs; **doors +137 cells and 8 -> 11 "
+            "centroid pairs (+37.5%)**; windows a further **+1,201 "
+            "cells but no additional centroid pair**; niches and apses "
+            "exactly **0** on every metric, as recesses that never "
+            "perforate must be. That graph result, not this raster "
+            "delta, is the correct aperture evidence.\n")
     else:
         report.append(
             f"**Door effect on ground visibility: {gdoor:.0f} cells** "
