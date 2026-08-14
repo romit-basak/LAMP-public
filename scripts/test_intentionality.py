@@ -26,7 +26,40 @@ cannot be tuned to its own answer:
     a 3-draw pilot had already run and its p was granularity-limited at
     0.25, so no p-value informed this choice, though the pilot's effect
     size was visible. Anyone re-running with more draws should get the
-    same verdict with a smaller p.
+    same verdict with a smaller p. **Superseded:** batching the ray
+    casts brought a draw to ~0.65 s, and the reported run uses the
+    pre-registered 999 after all. The reduction was never applied to a
+    result.
+  - **Correction, recorded: N2/N3 re-datum a moved chapel.** The first
+    run of these two translated a permuted chapel in plan only, so it
+    kept the elevation of the plot it came from. The necropolis spans
+    38 m of relief and a random permutation misplaces the median
+    chapel by 9.1 m against 3.6 m walls, leaving 78% of the null's
+    buildings hanging above their new ground or buried under it — a
+    floating chapel occludes nothing, so null V was inflated (medians
+    456 and 481 against an observed 377) and both nulls read as
+    "arrangement does not matter" for a purely mechanical reason.
+    They now translate in z as well, setting each chapel on its new
+    plot at the height above local ground it stands at on its own.
+    This does not touch N1, the headline, which never moves anything.
+  - **Deviation, recorded: sequential stopping.** A null now halts once
+    `--sequential-h` (default 10) of its draws have reached V_obs, and
+    reports p = h / L for the L drawn. That is Besag & Clifford's
+    curtailed Monte Carlo test, and it is exact rather than a peek —
+    validity comes from fixing h in advance and switching formulas
+    with the stopping reason, not from stopping when the answer looks
+    good. A null that never accumulates h exceedances runs the full
+    n_draws and keeps the pre-registered (1 + l) / (1 + n). The gain
+    is entirely in the uninteresting direction: a null that is going
+    to be non-significant ends in tens of draws instead of 199.
+    `--sequential-h 0` restores the original behaviour exactly.
+  - **Deviation, recorded: N2 and N3 share their position draw.** Draw
+    k of each uses the same layout permutation (common random
+    numbers), so N3 - N2 — "does orientation add anything beyond
+    position?" — is not carrying the variance of two independent
+    rearrangements. Both marginals stay uniform, so each null is still
+    sampled correctly, and Holm-Bonferroni holds under arbitrary
+    dependence between them.
   - Effect size beside every p: (V_obs - median(V_null)) / IQR(V_null).
     A significant p on a 1% effect is not an argument about intent.
   - Nulls: N1 permutes the observed entrance directions across chapels,
@@ -46,17 +79,63 @@ anyway — "standing at chapel A's entrance, can you see into chapel B?"
 — and give ~n^2 ordered pairs from data already here. Stated as a
 deviation, not passed off as the original design.
 
-Cost control: N1 only ever moves a chapel's door to a different wall of
-the same footprint, so meshes are cached by (id, wall) and built once —
-a few hundred distinct meshes rather than one rebuild per chapel per
-draw.
+Cost control, measured rather than guessed — and the measurement
+overturned the obvious plan, so both are recorded here.
+
+Profiling one draw: mesh building 0.11 s cold and free thereafter,
+scene assembly under 1 ms, ray-casting 82 s. Since N1 only ever moves a
+door to another wall of the same footprint, the same observer-target
+segment recurs across draws, so `PairCache` memoises on
+(observer chapel, its wall, target chapel, its wall). `--cross-check K`
+runs the cached and exhaustive paths from the same seed and asserts
+the two V sequences match draw for draw — not merely in distribution,
+since equal means over unequal draws would be a cache wrong in
+compensating directions. It passes: 6/6 draws identical, 0 mismatches
+over 149 audited re-casts.
+
+**It is nonetheless worth about 1.1x, not the order of magnitude the
+redundancy suggests, and the reason is worth knowing before optimising
+anything else here.** Cost is per *station*, not per segment: casting
+only a quarter of the targets takes 78.2 s against 80.3 s for all of
+them. Splitting one draw — heightfield march 65.5 s (79%), mesh
+occlusion 12.9 s (16%), mesh gathering 0.08 s (0.1%) — puts it in the
+terrain ray-march, at 0.33 s per station almost regardless of how many
+targets that station carries. At roughly 150 steps over a 60 m reach
+that is ~2.2 ms per step for ~40 rays, which is launch and
+synchronisation overhead rather than arithmetic. A per-segment memo
+cannot reach it: a station is skipped only when *every* one of its ~40
+targets is cached, which at a realistic hit rate almost never happens.
+
+The fix is therefore to batch the march across observers rather than
+to prune segments — one stepped pass over all stations instead of one
+per station. That is an engine change to `HeightfieldScene`, not a
+change here, and it would benefit every multi-observer caller. Until
+it lands, the cache stays on because it is verified and free, not
+because it is doing much.
+
+The cache applies to N1 only, and the restriction is not a
+conservatism: N2 and N3 permute chapel *positions*, so a chapel moved
+into a sightline blocks it for real, and a memo keyed on walls alone
+would be answering about a scene that no longer exists. Those nulls run
+exhaustively; `main` enforces it rather than trusting the caller.
+
+Long runs are interruptible. SIGINT or SIGTERM finishes the draw in
+flight, writes a checkpoint and exits 0; `--resume` restores the
+finished draws, the generator state and the cache, so a paused run
+continues as the same experiment rather than a new one. The checkpoint
+carries a fingerprint of the registry, DEM, radius, seed and null list
+and refuses to load into a different configuration — silently mixing
+draws from two experiments into one null distribution would produce a
+wrong histogram that nothing downstream could detect.
 """
 
 import argparse
 import csv
 import json
 import math
+import signal
 import sys
+import time
 from pathlib import Path
 
 import geopandas as gpd
@@ -69,7 +148,7 @@ import pandas as pd
 import rasterio
 
 from sanity_checks import (FOOTPRINTS, DEM_BASE_04, DEM_REGEN, ROOT,
-                           check, failures)
+                           check, warn, failures)
 from aperture_registry import (INVENTORY, BUILDING_FABRIC,
                                DOOR_WIDTH, DOOR_HEAD, DOOR_SILL,
                                canonical_walls, largest_poly)
@@ -81,6 +160,101 @@ ALPHA = 0.01
 AXIS_INSET_M = 0.5        # target this far inside the doorway
 STAND_OFF_M = 1.5         # observer this far outside the doorway
 EYE_HEIGHT = 1.5
+
+# Bump whenever a change alters what a draw *means* rather than which
+# draws are asked for. The checkpoint fingerprint covers configuration,
+# so without this a run resumed across such a change would splice two
+# different experiments into one null distribution and look fine doing
+# it. 2: N2/N3 re-datum a permuted chapel onto its new ground.
+DRAW_VERSION = 2
+
+# Nulls whose draws leave every chapel where it stands. Only these may
+# use the pair cache: it is keyed on (chapel, wall) pairs and says
+# nothing about a scene in which the chapels have been rearranged.
+STATIC_NULLS = ("N1",)
+
+# Set by SIGINT/SIGTERM so a long run stops between draws with its
+# checkpoint written, rather than in the middle of one with nothing.
+_STOP = {"now": False}
+
+
+def _on_signal(signum, _frame):
+    _STOP["now"] = True
+    print(f"\n[signal {signum}] finishing the current draw, then "
+          "checkpointing — press again to abort without saving",
+          flush=True)
+    signal.signal(signum, signal.SIG_DFL)
+
+
+class PairCache:
+    """Memoised `(observer chapel, its wall, target chapel, its wall)
+    -> visible`.
+
+    N1 moves a door from one wall of a footprint to another. The
+    observer station and the interior target both move with it, but
+    every chapel stays where it stands, so the same four-tuple recurs
+    across draws — about 173k distinct tuples against 4.7M evaluations
+    over a full 199-draw run.
+
+    **The key is approximate, so this is off by default.** It asserts
+    that no third chapel's door matters. The argument for that was
+    that a sightline crossing some other chapel C must enter and leave
+    it, needing two openings, while C has only one — but chapels are
+    modelled as wall panels, not watertight solids, so a ray can take
+    a single opening and pass out over a wall top or through a corner
+    gap. Cast exhaustively over 12 draws, 21,468 four-tuples recurred
+    and 13 of them were answered differently in different draws: a
+    rate of 6.1e-4, worth a few pairs of V per draw.
+
+    An earlier check compared 474 repeated pairs and found none, which
+    is why the assumption stood; at 6.1e-4 that test expected 0.29
+    counterexamples, so seeing zero told us almost nothing. The
+    `--cross-check` run, casting 25 draws both ways, is what caught it.
+
+    Kept behind a flag rather than deleted: it still reproduces the
+    finding, and it costs nothing to leave off now that batching has
+    brought a draw under a second, where the memo was worth only 1.1x.
+
+    **Also invalid when chapels move.** N2 and N3 permute positions,
+    and a chapel shifted into a sightline blocks it for real. The
+    caller must not pass a cache for those; `main` enforces it."""
+
+    def __init__(self, audit_rate=0.0, seed=0):
+        self.d = {}
+        self.hits = self.misses = 0
+        self.audited = self.mismatches = 0
+        self.audit_rate = float(audit_rate)
+        self.rng = np.random.default_rng(seed)
+
+    def __len__(self):
+        return len(self.d)
+
+    def wants_audit(self, n):
+        """Boolean mask picking which of `n` cache hits to re-cast."""
+        if self.audit_rate <= 0:
+            return np.zeros(n, bool)
+        return self.rng.random(n) < self.audit_rate
+
+    def note(self, key, cast_value):
+        """Record a freshly cast value, auditing it against the cache."""
+        prev = self.d.get(key)
+        if prev is None:
+            self.d[key] = cast_value
+        else:
+            self.audited += 1
+            if prev != cast_value:
+                self.mismatches += 1
+        return cast_value
+
+    def report(self):
+        tot = self.hits + self.misses
+        rate = (100.0 * self.hits / tot) if tot else 0.0
+        line = (f"pair cache: {len(self.d):,} entries, {self.hits:,} hits "
+                f"/ {tot:,} lookups ({rate:.1f}%)")
+        if self.audited:
+            line += (f"; audited {self.audited:,} re-casts, "
+                     f"{self.mismatches} mismatch(es)")
+        return line
 
 
 def wall_frame(walls, wi):
@@ -169,26 +343,44 @@ class Chapels:
         return eye, tgt
 
 
-def visible_pairs(ch, assign, base, device, radius, offsets=None):
-    """V and the per-chapel seen flags for one wall assignment."""
+def visible_pairs(ch, assign, base, device, radius, offsets=None,
+                  cache=None):
+    """V and the per-chapel seen flags for one wall assignment.
+
+    With `cache`, only the (observer wall, target wall) combinations
+    not seen before are ray-cast; the rest are looked up. The scene is
+    still assembled in full either way, because a cache miss has to be
+    cast against the same geometry every other draw saw."""
     ids = [b for b in ch.ids if b in assign]
     off = offsets or {}
     meshes, eyes, tgts = [], {}, {}
     for b in ids:
         tris, aabb = ch.mesh(b, assign[b])
-        dx, dy = off.get(b, (0.0, 0.0))
-        if dx or dy:
-            tris = tris + np.array([dx, dy, 0.0])
-            aabb = (aabb[0] + np.array([dx, dy, 0.0]),
-                    aabb[1] + np.array([dx, dy, 0.0]))
+        # Rigid in all three axes: a chapel moved across this site has
+        # to be re-datumed onto the ground it lands on. Translating in
+        # plan alone leaves it at the elevation it came from, and the
+        # necropolis spans 38 m of relief — a random permutation
+        # misplaces the median chapel by 9 m, well over its own 3.6 m
+        # walls, so most of the null's buildings would hang in the air
+        # occluding nothing (or sit buried). dz keeps the building's
+        # height above its own floor exactly as measured.
+        dx, dy, dz = off.get(b, (0.0, 0.0, 0.0))
+        if dx or dy or dz:
+            shift = np.array([dx, dy, dz])
+            tris = tris + shift
+            aabb = (aabb[0] + shift, aabb[1] + shift)
         meshes.append((tris, aabb))
         e, t = ch.station(b, assign[b])
-        eyes[b] = (e[0] + dx, e[1] + dy, e[2])
-        tgts[b] = (t[0] + dx, t[1] + dy, t[2])
+        eyes[b] = (e[0] + dx, e[1] + dy, e[2] + dz)
+        tgts[b] = (t[0] + dx, t[1] + dy, t[2] + dz)
     scene = HybridScene(base, meshes)
 
-    V, seen = 0, {b: False for b in ids}
+    # Plan every station first, then cast the whole site in one batch.
+    # The march is launch-bound, so 197 separate calls of ~40 rays cost
+    # far more than one call of ~7,800; planning first is what makes
+    # that single call possible without changing which rays are cast.
     xy = np.array([[tgts[b][0], tgts[b][1]] for b in ids])
+    plans, eyes_b, tgts_b, eidx = [], [], [], []
     for i, a in enumerate(ids):
         e = eyes[a]
         d = np.hypot(xy[:, 0] - e[0], xy[:, 1] - e[1])
@@ -196,13 +388,147 @@ def visible_pairs(ch, assign, base, device, radius, offsets=None):
                if j != i and d[j] <= radius]
         if not sel:
             continue
-        arr = np.array([tgts[ids[j]] for j in sel], float)
-        vis = np.asarray(scene.visible_mask(e, arr)) == 1
+        if cache is None:
+            keys = None
+            vis = np.zeros(len(sel), bool)
+            todo = list(range(len(sel)))
+        else:
+            keys = [(a, assign[a], ids[j], assign[ids[j]]) for j in sel]
+            known = np.array([k in cache.d for k in keys])
+            audit = cache.wants_audit(len(keys)) & known
+            cache.hits += int(known.sum())
+            cache.misses += int((~known).sum())
+            vis = np.array([cache.d.get(k, False) for k in keys], bool)
+            todo = [int(t) for t in np.flatnonzero(~known | audit)]
+        if todo:
+            m = len(eyes_b)
+            eyes_b.append(e)
+            for t in todo:
+                tgts_b.append(tgts[ids[sel[t]]])
+                eidx.append(m)
+        plans.append((sel, keys, vis, todo))
+
+    cast = (scene.visible_mask_multi(np.array(eyes_b, float),
+                                     np.array(tgts_b, float),
+                                     np.array(eidx, np.int64))
+            if tgts_b else np.zeros(0, bool))
+
+    V, seen, pos = 0, {b: False for b in ids}, 0
+    for sel, keys, vis, todo in plans:
+        for t in todo:
+            ok = bool(cast[pos])
+            pos += 1
+            vis[t] = cache.note(keys[t], ok) if cache is not None else ok
         V += int(vis.sum())
         for j, ok in zip(sel, vis):
             if ok:
                 seen[ids[j]] = True
-    return V, seen, sum(1 for b in ids for _ in [0])
+    return V, seen, len(ids)
+
+
+def fingerprint(args, n_chapels):
+    """Config identity a checkpoint must match before it is resumed.
+
+    Resuming into a different scene would silently mix draws from two
+    different experiments into one null distribution, which no
+    downstream check would catch — the histogram would simply be
+    wrong. Everything that changes what a draw means goes in here."""
+    return {
+        "n_draws": args.n_draws, "radius": args.radius,
+        "seed": args.seed, "nulls": list(args.nulls),
+        "chapels": n_chapels, "registry": str(args.registry),
+        "fabric": str(args.fabric), "dem": str(args.dem),
+        "registry_mtime": Path(args.registry).stat().st_mtime,
+        "draw_version": DRAW_VERSION,
+    }
+
+
+def save_checkpoint(path, fp, done, cache, elapsed):
+    """Atomically persist progress: finished draws and the pair cache.
+
+    No generator state is stored. Every draw is seeded from
+    (seed, stream, draw index), so resuming means re-deriving draw k
+    rather than replaying a stream — which is both simpler and immune
+    to a checkpoint written mid-stream."""
+    keys = np.array([list(k) for k in cache.d], dtype=np.int32) \
+        if cache and cache.d else np.zeros((0, 4), np.int32)
+    vals = np.array(list(cache.d.values()), bool) if cache and cache.d \
+        else np.zeros(0, bool)
+    tmp = path.with_suffix(".tmp.npz")
+    np.savez_compressed(
+        tmp, meta=json.dumps({
+            "fingerprint": fp, "done": {k: list(v) for k, v in done.items()},
+            "elapsed_s": elapsed,
+            "cache_audited": getattr(cache, "audited", 0),
+            "cache_mismatches": getattr(cache, "mismatches", 0),
+        }, default=str), cache_keys=keys, cache_vals=vals)
+    tmp.replace(path)
+
+
+def load_checkpoint(path, fp, cache):
+    """Restore a checkpoint, or return None if it does not apply."""
+    if not path.exists():
+        return None
+    with np.load(path, allow_pickle=False) as z:
+        meta = json.loads(str(z["meta"]))
+        if meta.get("fingerprint") != json.loads(json.dumps(fp, default=str)):
+            warn("checkpoint ignored", "it was written for a different "
+                 "configuration; delete it or change --checkpoint")
+            return None
+        if cache is not None:
+            for k, v in zip(z["cache_keys"], z["cache_vals"]):
+                cache.d[tuple(int(x) for x in k)] = bool(v)
+    return meta
+
+
+def run_cross_check(args, ch, base, device, draw_for):
+    """Assert the cached path reproduces the exhaustive one exactly.
+
+    Both runs are driven from the same seed, so draw k is the same
+    permutation in each and the two V sequences must agree element by
+    element — not merely in distribution. An equal mean with different
+    draws would mean the cache is wrong in compensating directions,
+    which is the failure this is here to catch.
+
+    It does fail, and that is the finding rather than a defect here:
+    at 25 draws it shows the memo drifting V by a few pairs on over
+    half of them, which is why `--pair-cache` now defaults to off. Run
+    it to reproduce that; expect a non-zero exit."""
+    k = args.cross_check
+    print(f"\nCROSS-CHECK: {k} N1 draws, cached vs exhaustive")
+
+    t0 = time.time()
+    slow = []
+    for i in range(k):
+        a, off = draw_for("N1", i)
+        v, _, _ = visible_pairs(ch, a, base, device, args.radius, off)
+        slow.append(v)
+    t_slow = time.time() - t0
+
+    t0 = time.time()
+    cache = PairCache(args.cache_audit_rate, args.seed)
+    fast = []
+    for i in range(k):
+        a, off = draw_for("N1", i)
+        v, _, _ = visible_pairs(ch, a, base, device, args.radius, off,
+                                cache)
+        fast.append(v)
+    t_fast = time.time() - t0
+
+    bad = [(i, s, f) for i, (s, f) in enumerate(zip(slow, fast)) if s != f]
+    check(not bad, "cached V matches exhaustive V on every draw",
+          f"{len(bad)} of {k} differ: {bad[:5]}")
+    check(cache.mismatches == 0,
+          "in-run cache audit found no stale entries",
+          f"{cache.mismatches} mismatch(es) over {cache.audited} re-casts")
+    print(f"  exhaustive: {t_slow:6.1f}s  ({t_slow / k:.1f}s/draw)")
+    print(f"  cached:     {t_fast:6.1f}s  ({t_fast / k:.1f}s/draw), "
+          f"speed-up {t_slow / max(t_fast, 1e-9):.1f}x")
+    print(f"  {cache.report()}")
+    print(f"  V sequence: {slow[:8]}{' ...' if k > 8 else ''}")
+    if failures:
+        sys.exit(1)
+    print("\ncross-check passed")
 
 
 def build_parser():
@@ -220,6 +546,36 @@ def build_parser():
     p.add_argument("--seed", type=int, default=20260813)
     p.add_argument("--out-dir", type=Path,
                    default=ROOT / "200_Projects/250_Apertures/intentionality")
+    p.add_argument("--pair-cache", dest="pair_cache",
+                   action="store_true", default=False,
+                   help="memoise (chapel, wall) pair visibility across "
+                        "draws — N1 only. Approximate: a third "
+                        "chapel's door flips ~6e-4 of repeated pairs, "
+                        "moving V by a few (default: off)")
+    p.add_argument("--no-pair-cache", dest="pair_cache",
+                   action="store_false",
+                   help="cast every pair every draw (default)")
+    p.add_argument("--cache-audit-rate", type=float, default=0.02,
+                   help="fraction of cache hits re-cast and compared, "
+                        "so the memo keeps proving itself mid-run")
+    p.add_argument("--checkpoint", type=Path, default=None,
+                   help="progress file (default: <out-dir>/"
+                        "intentionality_checkpoint.npz). Written after "
+                        "every --checkpoint-every draws and on SIGINT/"
+                        "SIGTERM, so a long run survives being stopped")
+    p.add_argument("--checkpoint-every", type=int, default=10,
+                   help="draws between checkpoint writes")
+    p.add_argument("--resume", action="store_true",
+                   help="continue from the checkpoint if its "
+                        "configuration matches")
+    p.add_argument("--sequential-h", type=int, default=10, metavar="H",
+                   help="stop a null once H draws have reached V_obs "
+                        "and report p = H/L (Besag-Clifford); 0 runs "
+                        "the full --n-draws every time")
+    p.add_argument("--cross-check", type=int, default=0, metavar="K",
+                   help="run K draws of N1 both with and without the "
+                        "cache and assert the V sequences match, then "
+                        "exit without writing results")
     return p
 
 
@@ -267,34 +623,119 @@ def main():
           f"p_chapel = {p_chapel_obs:.3f} "
           f"({sum(seen_obs.values())}/{n_ch} chapels seen into)")
 
-    rng = np.random.default_rng(args.seed)
     ids = sorted(assign)
     cent = {b: ch.geom[b].centroid for b in ids}
+
+    def walls_from(perm):
+        return {b: assign[o] % ch.n_walls(b) for b, o in zip(ids, perm)}
+
+    def offsets_from(perm):
+        """Move each chapel onto another's plot, ground included.
+
+        `ch.floor` is the bare-earth elevation under the chapel, so
+        the z term sets it down on the new plot at the same height
+        above local ground it stands at on its own."""
+        return {b: (cent[o].x - cent[b].x, cent[o].y - cent[b].y,
+                    ch.floor[o] - ch.floor[b])
+                for b, o in zip(ids, perm)}
+
+    def draw_for(null, k):
+        """Draw `k` of one null, as (wall assignment, position offsets).
+
+        Each stream is seeded from (seed, stream id, draw index) rather
+        than drawn from one running generator. Two consequences, both
+        wanted: a resumed run reproduces draw k exactly by re-deriving
+        it, with no generator state to carry; and **N2 and N3 share
+        stream 2, so draw k of each uses the same position
+        permutation**. That coupling is deliberate — common random
+        numbers across the two nulls. Each null is still sampled
+        correctly on its own, since both permutations remain uniform,
+        and Holm-Bonferroni is valid under arbitrary dependence. What
+        it buys is the contrast: N3 minus N2 is the question "does
+        orientation add anything beyond position?", and sharing the
+        layout cancels the position noise common to both instead of
+        adding the variance of two independent draws."""
+        if null == "N1":
+            r = np.random.default_rng([args.seed, 1, k])
+            return walls_from(r.permutation(ids)), None
+        pos = np.random.default_rng([args.seed, 2, k]).permutation(ids)
+        if null == "N2":
+            return dict(assign), offsets_from(pos)
+        r3 = np.random.default_rng([args.seed, 3, k])
+        return walls_from(r3.permutation(ids)), offsets_from(pos)
+
+    if args.cross_check:
+        run_cross_check(args, ch, base, device, draw_for)
+        return
+
+    signal.signal(signal.SIGINT, _on_signal)
+    signal.signal(signal.SIGTERM, _on_signal)
+    ckpt = args.checkpoint or (args.out_dir /
+                               "intentionality_checkpoint.npz")
+    fprint = fingerprint(args, n_ch)
+    cache = (PairCache(args.cache_audit_rate, args.seed)
+             if args.pair_cache else None)
+    done, elapsed0 = {}, 0.0
+    if args.resume:
+        meta = load_checkpoint(ckpt, fprint, cache)
+        if meta:
+            done = {k: list(v) for k, v in meta["done"].items()}
+            elapsed0 = float(meta.get("elapsed_s", 0.0))
+            print(f"resumed from {ckpt.name}: "
+                  + ", ".join(f"{k} {len(v)}/{args.n_draws}"
+                              for k, v in done.items())
+                  + (f", cache {len(cache):,} entries" if cache else ""))
+
+    t0 = time.time()
     rows, dists = [], {}
     for null in args.nulls:
-        Vs = []
-        for _ in range(args.n_draws):
-            if null == "N1":
-                perm = rng.permutation(ids)
-                a = {b: assign[o] % ch.n_walls(b)
-                     for b, o in zip(ids, perm)}
-                off = None
-            elif null == "N2":
-                perm = rng.permutation(ids)
-                a = dict(assign)
-                off = {b: (cent[o].x - cent[b].x, cent[o].y - cent[b].y)
-                       for b, o in zip(ids, perm)}
-            else:
-                p1, p2 = rng.permutation(ids), rng.permutation(ids)
-                a = {b: assign[o] % ch.n_walls(b)
-                     for b, o in zip(ids, p1)}
-                off = {b: (cent[o].x - cent[b].x, cent[o].y - cent[b].y)
-                       for b, o in zip(ids, p2)}
-            v, _, _ = visible_pairs(ch, a, base, device, args.radius, off)
+        Vs = list(done.get(null, []))
+        use_cache = cache if null in STATIC_NULLS else None
+        if cache and use_cache is None and len(Vs) == 0:
+            print(f"  {null}: pair cache off — this null moves chapels, "
+                  "so a cached pair no longer describes the same scene")
+        stopped_early = False
+        while len(Vs) < args.n_draws:
+            a, off = draw_for(null, len(Vs))
+            v, _, _ = visible_pairs(ch, a, base, device, args.radius,
+                                    off, use_cache)
             Vs.append(v)
+            n = len(Vs)
+            n_ge = int(np.sum(np.array(Vs) >= V_obs))
+            if args.sequential_h and n_ge >= args.sequential_h:
+                stopped_early = True
+                print(f"  {null}: stopped at draw {n} — {n_ge} null "
+                      f"draws reached V_obs, p = {n_ge / n:.4f}",
+                      flush=True)
+            if (n % args.checkpoint_every == 0 or _STOP["now"]
+                    or stopped_early):
+                done[null] = Vs
+                save_checkpoint(ckpt, fprint, done, cache,
+                                elapsed0 + time.time() - t0)
+            if n % 25 == 0 or _STOP["now"]:
+                print(f"  {null}: {n}/{args.n_draws} draws, "
+                      f"{time.time() - t0:.0f}s this session"
+                      + (f", {cache.report()}" if use_cache else ""),
+                      flush=True)
+            if _STOP["now"]:
+                done[null] = Vs
+                save_checkpoint(ckpt, fprint, done, cache,
+                                elapsed0 + time.time() - t0)
+                print(f"\npaused at {null} {len(Vs)}/{args.n_draws}. "
+                      f"Resume with:\n  --resume --checkpoint {ckpt}")
+                sys.exit(0)
+            if stopped_early:
+                break
+        done[null] = Vs
         Vs = np.array(Vs, float)
         dists[null] = Vs
-        pval = (1 + int(np.sum(Vs >= V_obs))) / (1 + len(Vs))
+        n_ge = int(np.sum(Vs >= V_obs))
+        # Besag-Clifford: a run curtailed on the h-th exceedance reads
+        # p = h / L, and one that goes the distance keeps the usual
+        # (1 + l) / (1 + n). Both are exact; mixing the two formulas is
+        # what makes early stopping valid rather than a peek at the data.
+        pval = (n_ge / len(Vs)) if stopped_early else \
+            (1 + n_ge) / (1 + len(Vs))
         iqr = float(np.percentile(Vs, 75) - np.percentile(Vs, 25))
         eff = ((V_obs - float(np.median(Vs))) / iqr) if iqr > 0 else \
             float("nan")
