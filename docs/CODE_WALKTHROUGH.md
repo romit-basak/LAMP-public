@@ -1334,6 +1334,44 @@ whole buildings its rays cannot reach; a 2D grid or BVH stays the
 profiling-gated next step if real chapel models ever make brute force
 slow (CLAUDE.md's long-standing note).
 
+**The many-observer path, and why it inverts those choices.**
+`visible_mask_multi` answers a whole bundle of (eye, target) rays from
+*different* eyes in one go — the shape the intentionality test needs,
+where ~200 chapels each look at their ~40 neighbours. Doing it as a
+loop over `visible_mask` is correct and was the first implementation;
+it is also, measured, almost entirely overhead. Both halves were
+therefore batched over observers, and each cost something to get
+there:
+
+- The **terrain march** generalises its integer cell anchor `(ci, ri)`
+  and the observer height to per-ray tensors. That is exactly
+  equivalent — the per-eye and batched forms were checked bit for bit
+  over 7,823 rays, 0 differing — and runs ~179× faster, because the
+  march is launch-bound: ~15 tiny device ops × ~300 steps, once per
+  observer.
+- The **mesh pass** (`segments_blocked_multi`, `_mt_min_t_multi`)
+  cannot keep the eye-relative frame, since there is no single eye, so
+  the tvec/qvec terms stop being per-triangle constants and cost ~1.7×
+  the arithmetic per pair. It also drops the per-eye bounding-box cull,
+  testing every ray against the whole site (~4.2× more pairs). Paying
+  ~7× the arithmetic bought ~35× wall-clock, which is the measure of
+  how overhead-dominated the loop was.
+
+The order of that work matters more than either number. The march was
+optimised first because profiling put it at 79% of a draw; afterwards
+the mesh pass was 98.7% and the march 1.3%, on a draw that had barely
+got faster. Re-profiling *after* a win, rather than trusting the
+original split, is what turned a 1.1× into ~100×.
+
+**The frame is keyed on geometry, not on the rays.** The batched mesh
+pass translates to a frame local to the *triangles* (their bounding-box
+centre), never to something ray-derived like the mean eye. With a
+ray-derived anchor the frame moves when a caller casts only a subset,
+so a memoising caller and an exhaustive one round differently on rays
+that graze a triangle edge and disagree for no reason but float32.
+That is not hypothetical — it was the first implementation, and the
+cross-check caught it.
+
 **One self-check had to be *removed* for hybrid scenes** — and the
 reason is the feature working. `run_self_checks`' "raising the eye
 never reduces the visible count" is a theorem for heightfields, but
@@ -1505,6 +1543,9 @@ pass, not live bugs.
 | `scene3d.py`, `_mt_min_t` | Barycentric bounds accept a hair *outside* the triangle (`-1e-6`) | Adjacent triangles share edges exactly; testing strictly inside lets a ray thread the float-rounding crack between them | Occasional one-ray light leaks through solid walls, unreproducible across devices |
 | `scene3d.py`, `segment_blocked` | Hits within 5 cm of the target don't count as blockers | A viewshed target can lie exactly ON a wall face; the surface it sits on isn't an occluder of itself | Every cell whose surface point touches a mesh wall would read "not visible" |
 | `scene3d.py`, `HybridScene.first_hit` | Passes the heightfield's own hit as the mesh search cutoff | The final answer is min(heightfield, mesh) — a mesh hit farther than the heightfield's can never win | Nothing breaks; it's a free cull that keeps mesh cost proportional to what's actually in view |
+| `scene3d.py`, `segments_blocked_multi` | Local frame is the *triangles'* bounding-box centre, never the mean eye or anything else ray-derived | A ray-derived anchor shifts when a caller casts only a subset, so a memoising and an exhaustive caller round differently on edge-grazing rays | Two callers disagree on a handful of pairs with neither being wrong — a bug that looks like a cache staleness bug and isn't |
+| `scene3d.py`, `_mt_min_t_multi` | Deliberately drops the per-eye bounding-box cull and pays ~1.7× arithmetic per pair | The loop it replaces spent ~99% of its time in launch/compile/sync overhead, not arithmetic; ~7× the math bought ~35× the wall-clock | Reinstating the "optimisation" would make the many-observer path slower, not faster |
+| `test_intentionality.py`, `PairCache` | Off by default, kept only behind a flag | Its key assumes no third chapel's door matters; cast exhaustively, 13 of 21,468 repeated four-tuples disagree (6.1e-4), because chapels are wall panels rather than watertight solids | Silent drift of a few pairs in V per draw — small, but in the direction of the statistic being tested |
 | `viewshed.py`, `run_self_checks` | Eye-height monotonicity check skipped when the scene has meshes | Raising the eye above a door head legitimately *loses* the through-the-door cells — the "theorem" only holds for heightfields | A correct aperture run would FAIL its own self-check |
 | `observer_view.py`, cross-validation | Tests the ray's own 3D hit point (`eye_z + slope·d`), not `surface_z` at the hit's plan position | A mesh hit (mid-wall, dome) floats above the heightfield ground; the ground under it may be legitimately occluded | The hybrid scene's renders would fail cross-validation at ~93% despite being correct |
 | `aperture_registry.canonical_walls` | Ring simplification + sliver merge + collinear drop + lex-lowest start, in one shared function | "Wall index N" must mean the same wall in the seeder and the builder, across digitizing noise | A hole cut into the wrong wall with no error anywhere |

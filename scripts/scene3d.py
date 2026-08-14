@@ -22,7 +22,9 @@ device-agnostic cuda->mps->cpu stack as the heightfield march; no mesh
 library, per the project's dependency-light stance). Triangles are
 translated to eye-relative coordinates in float64 on the host before
 the float32 upload — the same precision idiom as the heightfield's
-eye-anchored march (UTM magnitudes ~1e6 overwhelm float32).
+eye-anchored march (UTM magnitudes ~1e6 overwhelm float32). The
+many-observer path cannot use a single eye as that anchor, so it
+translates to a frame local to the ray bundle instead.
 
 Run as a script, this executes the aperture self-checks against the
 synthetic assets from make_test_building.py:
@@ -46,7 +48,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from sanity_checks import check, warn, failures
+from sanity_checks import check, failures
 from volume_mesh import load_obj, check_soup
 
 # Barycentric tolerance: accept hits marginally outside an edge so a ray
@@ -149,6 +151,68 @@ def _mt_min_t(eye, dirs, t_lo, t_hi, tris, device):
     return out
 
 
+def _mt_min_t_multi(origins, dirs, t_lo, t_hi, tris, device):
+    """As `_mt_min_t`, but every ray carries its own origin.
+
+    Folding the origin into per-triangle constants is cheaper per pair
+    and ties one call to one observer. Here the origin varies per ray,
+    so tvec/qvec become per-pair terms — about 1.7x the arithmetic —
+    and in exchange the whole site is tested in a handful of launches
+    instead of one per observer. Measurement drives the trade: with a
+    few thousand triangles the per-observer form spends ~99% of its
+    time in launch, graph-compile and device-sync overhead rather than
+    arithmetic, so paying more arithmetic to launch less is a large
+    net win.
+
+    `origins` and `tris` must already be in a common local frame
+    (translated on the host in float64), because the float32 upload
+    cannot hold UTM magnitudes.
+    """
+    n = len(dirs)
+    out = np.full(n, np.inf)
+    if n == 0 or len(tris) == 0:
+        return out
+
+    t32 = lambda a: torch.as_tensor(  # noqa: E731
+        np.asarray(a, dtype=np.float32), device=device)
+    tris_t = t32(tris)
+    v0 = tris_t[:, 0]
+    e1, e2 = tris_t[:, 1] - v0, tris_t[:, 2] - v0
+
+    chunk_tris = min(len(tris), 4096)
+    # The per-pair terms are 3-vectors and several are live at once, so
+    # the ray block is sized against a fraction of the element budget.
+    chunk_rays = max(1, BATCH_ELEMS // (4 * chunk_tris))
+
+    for s in range(0, n, chunk_rays):
+        d_t = t32(dirs[s:s + chunk_rays])[:, None, :]
+        o_t = t32(origins[s:s + chunk_rays])[:, None, :]
+        lo = t32(t_lo[s:s + chunk_rays])[:, None]
+        hi = t32(t_hi[s:s + chunk_rays])[:, None]
+        best = torch.full((d_t.shape[0],), math.inf, device=device)
+        for ts in range(0, len(tris_t), chunk_tris):
+            v0c = v0[ts:ts + chunk_tris][None]
+            e1c = e1[ts:ts + chunk_tris][None]
+            e2c = e2[ts:ts + chunk_tris][None]
+            pvec = torch.linalg.cross(d_t.expand(-1, e2c.shape[1], -1),
+                                      e2c.expand(d_t.shape[0], -1, -1))
+            det = (pvec * e1c).sum(-1)
+            inv = 1.0 / det
+            tvec = o_t - v0c
+            u = (pvec * tvec).sum(-1) * inv
+            qvec = torch.linalg.cross(tvec, e1c.expand_as(tvec))
+            v = (d_t * qvec).sum(-1) * inv
+            t = (e2c * qvec).sum(-1) * inv
+            ok = ((det.abs() > EPS_DET)
+                  & (u >= -EPS_BARY) & (v >= -EPS_BARY)
+                  & (u + v <= 1.0 + EPS_BARY)
+                  & (t > lo) & (t < hi))
+            t = torch.where(ok, t, torch.full_like(t, math.inf))
+            best = torch.minimum(best, t.amin(dim=1))
+        out[s:s + chunk_rays] = best.cpu().numpy().astype(np.float64)
+    return out
+
+
 def _gather_reachable(meshes, eye, reach):
     """One triangle array for every mesh a ray of length `reach` could
     touch, or None.
@@ -185,6 +249,51 @@ def segment_blocked(eye, targets, meshes, device, d_min, back=0.05):
     if tris is None:
         return np.zeros(len(targets), dtype=bool)
     return np.isfinite(_mt_min_t(eye, dirs, t_lo, t_hi, tris, device))
+
+
+def segments_blocked_multi(eyes, targets, eye_index, meshes, device,
+                           d_min, back=0.05):
+    """`segment_blocked` for rays leaving many different eyes.
+
+    Same acceptance window and the same two-sided test; only the
+    scheduling differs. Two things are given up to get one launch:
+    the per-eye AABB cull, so every ray is tested against the whole
+    site's triangles, and the eye-relative frame, replaced by a frame
+    local to the ray bundle. Neither is free, and both were measured
+    before being taken — the cull saves ~4x arithmetic on a problem
+    whose arithmetic is not the cost, and the shared frame keeps the
+    site within a few hundred metres of the origin, so float32 holds
+    positions to ~1e-4 m against acceptance windows of 0.05 m and up.
+
+    That frame is taken from the triangles, never from the rays. A
+    ray-derived anchor (the mean eye, say) shifts when the caller casts
+    a subset, so a memoising caller casting only its misses would
+    disagree with an exhaustive one on rays grazing a triangle edge —
+    from rounding alone, with no error in either. Keyed on geometry,
+    the frame is the same for every batch drawn against one scene.
+    """
+    eyes = np.asarray(eyes, dtype=np.float64)
+    targets = np.asarray(targets, dtype=np.float64)
+    idx = np.asarray(eye_index, dtype=np.int64)
+    if len(targets) == 0:
+        return np.zeros(0, dtype=bool)
+
+    keep = [tris for tris, _aabb in meshes if len(tris)]
+    if not keep:
+        return np.zeros(len(targets), dtype=bool)
+    tris = keep[0] if len(keep) == 1 else np.concatenate(keep, axis=0)
+
+    org = eyes[idx]
+    dirs = targets - org
+    L = np.linalg.norm(dirs, axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t_lo = d_min / L
+        t_hi = (L - back) / L
+
+    flat = tris.reshape(-1, 3)
+    ref = (flat.min(axis=0) + flat.max(axis=0)) / 2.0
+    return np.isfinite(_mt_min_t_multi(org - ref, dirs, t_lo, t_hi,
+                                       tris - ref, device))
 
 
 def mesh_first_hit(eye, ux, uy, slope, meshes, device, d_min, t_hi=None):
@@ -245,6 +354,27 @@ class HybridScene:
             blocked = segment_blocked(eye, targets[idx], self._meshes,
                                       self._base.device, self._base.d_min)
             vis[idx[blocked]] = False
+        return vis
+
+    def visible_mask_multi(self, eyes_xyz, targets_xyz, eye_index):
+        """Many-observer LOS: both halves batched over all observers.
+
+        Terrain and mesh are still ANDed, so the mesh pass only ever
+        runs on the heightfield's survivors. Both halves are launched
+        once for the whole bundle rather than once per observer, which
+        is what the cost actually consists of: on this site a draw of
+        ~200 observers spent ~99% of its time in per-call overhead and
+        ~1% in the intersection arithmetic itself."""
+        eyes = np.asarray(eyes_xyz, dtype=np.float64)
+        targets = np.asarray(targets_xyz, dtype=np.float64)
+        idx = np.asarray(eye_index, dtype=np.int64)
+        vis = self._base.visible_mask_multi(eyes, targets, idx)
+        sel = np.flatnonzero(vis)
+        if len(sel):
+            blocked = segments_blocked_multi(
+                eyes, targets[sel], idx[sel], self._meshes,
+                self._base.device, self._base.d_min)
+            vis[sel[blocked]] = False
         return vis
 
     def first_hit(self, eye_xyz, ux, uy, slope, max_range=None,

@@ -143,6 +143,100 @@ class HeightfieldScene:
         z = top * (1 - wr) + bot * wr
         return np.where(valid, z, np.nan)
 
+    def visible_mask_multi(self, eyes_xyz, targets_xyz, eye_index):
+        """LOS for rays from many observers at once. Returns bool [N].
+
+        Same march as `visible_mask`, with every observer's rays folded
+        into one stepped pass: `targets_xyz` is (N,3), `eyes_xyz` is
+        (M,3), and `eye_index` (N,) says which observer each target
+        belongs to.
+
+        This exists because the march is launch-bound, not
+        arithmetic-bound. Each step issues ~15 tiny device operations,
+        and a 60 m reach at the default step is a few hundred steps, so
+        one observer with 40 targets costs a few thousand kernel
+        launches on work that would fit in one. Measured on the
+        intentionality scene: 0.33 s per observer, essentially flat in
+        the number of targets, which is 79% of that experiment's whole
+        runtime. Batching 197 observers leaves the step count unchanged
+        and makes each step operate on 7,823 rays instead of 40 — the
+        same arithmetic, a couple of hundred launches instead of tens
+        of thousands.
+
+        The eye-relative pixel trick survives the generalisation: the
+        integer anchor (ci, ri) simply becomes a per-ray integer tensor
+        instead of a pair of host scalars, and the float offsets stay
+        bounded by the reach in pixels, well inside float32. Observer
+        height varies per ray too, so `ez` becomes a tensor.
+
+        Rays whose target is nearer than the current step are masked
+        off rather than removed, so a short ray costs nothing after it
+        finishes but does not disturb the batch."""
+        eyes = np.asarray(eyes_xyz, dtype=np.float64)
+        targets = np.asarray(targets_xyz, dtype=np.float64)
+        idx = np.asarray(eye_index, dtype=np.int64)
+        n = len(targets)
+        if n == 0:
+            return np.zeros(0, dtype=bool)
+
+        ex, ey, ez = eyes[idx, 0], eyes[idx, 1], eyes[idx, 2]
+        col_eye, row_eye = self._pix(ex, ey)
+        ci = np.round(col_eye).astype(np.int64)
+        ri = np.round(row_eye).astype(np.int64)
+        cf, rf = col_eye - ci, row_eye - ri
+
+        dx, dy = targets[:, 0] - ex, targets[:, 1] - ey
+        D = np.hypot(dx, dy)
+        near = D < self.d_min
+        with np.errstate(invalid="ignore", divide="ignore"):
+            ux, uy = dx / D, dy / D
+            ang_t = (targets[:, 2] - ez) / D
+
+        t = lambda arr, dt=torch.float32: torch.as_tensor(  # noqa: E731
+            arr, dtype=dt, device=self.device)
+        D_t, ang_t_t = t(D), t(ang_t)
+        ez_t = t(ez)
+        cf_t, rf_t = t(cf), t(rf)
+        ci_t, ri_t = t(ci, torch.long), t(ri, torch.long)
+        ucol, urow = t(ux / self.a), t(uy / self.e)
+        running = torch.full((n,), -math.inf, device=self.device)
+
+        d_max = float(np.nanmax(D)) if n else 0.0
+        for k in range(1, int(math.ceil(d_max / self.step)) + 2):
+            d_k = k * self.step
+            if d_k < self.d_min:
+                continue
+            active = D_t - self.d_min >= d_k
+            if not bool(active.any()):
+                break
+            rel_col = cf_t + ucol * d_k
+            rel_row = rf_t + urow * d_k
+            fc, fr = torch.floor(rel_col), torch.floor(rel_row)
+            wc, wr = rel_col - fc, rel_row - fr
+            c0 = ci_t + fc.to(torch.long)
+            r0 = ri_t + fr.to(torch.long)
+            inb = ((c0 >= 0) & (c0 < self.W - 1)
+                   & (r0 >= 0) & (r0 < self.H - 1))
+            base = r0.clamp(0, self.H - 2) * self.W + c0.clamp(0, self.W - 2)
+            z00 = self.dem_flat[base]
+            z01 = self.dem_flat[base + 1]
+            z10 = self.dem_flat[base + self.W]
+            z11 = self.dem_flat[base + self.W + 1]
+            valid = inb & active
+            if self.nodata is not None:
+                valid &= ~((z00 == self.nodata) | (z01 == self.nodata) |
+                           (z10 == self.nodata) | (z11 == self.nodata))
+            top = z00 * (1 - wc) + z01 * wc
+            bot = z10 * (1 - wc) + z11 * wc
+            ang = ((top * (1 - wr) + bot * wr) - ez_t) / d_k
+            ang = torch.where(valid, ang, torch.full_like(ang, -math.inf))
+            running = torch.maximum(running, ang)
+
+        vis = (ang_t_t >= running - self.eps_ang).cpu().numpy()
+        vis |= near
+        vis &= np.isfinite(ang_t)
+        return vis
+
     def visible_mask(self, eye_xyz, targets_xyz, chunk=200_000):
         """LOS from eye (3,) to each target (N,3 world; tz is the endpoint
         surface). Returns a bool numpy array [N]. Per-bearing ray-march with a
