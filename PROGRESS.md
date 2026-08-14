@@ -3,6 +3,56 @@
 > Running record of major work on the viewshed half of LAMP. Newest entries at the top.
 > Keep entries brief: what was done, key findings/decisions, open questions raised.
 
+## 2026-08-14 — The intentionality test runs and rejects on all three nulls; the engine got ~100x faster and two bugs were found on the way
+
+**Headline: the entrance arrangement is not accidental.** V = 377 inter-visible chapel-pairs observed, against null medians of 270 / 252 / 264. All three nulls give **p = 0.001** (the smallest attainable at 999 draws — *zero* null draws out of 999 reached the observed value), Holm-adjusted **0.003**, rejecting at the pre-registered alpha = 0.01, with effect sizes of **+3.6 / +3.8 / +3.3 IQR**. N1 holds every chapel where it stands and permutes only which wall carries the door, so the result is about *orientation*, and N2/N3 say the same for position and for both together. Written to `250_Apertures/intentionality/`.
+
+### The engine: one draw went from 104 s to 0.65 s
+
+- **Both halves of the ray cast now batch over observers** (`HeightfieldScene.visible_mask_multi`, `HybridScene.visible_mask_multi`, `segments_blocked_multi` / `_mt_min_t_multi`). The terrain march generalises its integer cell anchor and eye height to per-ray tensors: **bit-identical to the per-eye path, 0 of 7,823 rays differing, and 179x faster**. The mesh pass gives up the eye-relative frame and the per-eye bounding-box cull — ~7x the arithmetic — and still runs **34.7x faster**, because the loop it replaces spent ~99% of its time in kernel launch, MPS graph compilation and device sync. Verified at **0 of 46,122 rays differing over 6 draws**, V identical on each, and the synthetic cube+dome+door self-checks still pass.
+- **The ordering is the lesson.** Profiling put the march at 79% of a draw, so it was optimised first; afterwards the mesh pass was **98.7%** and the march 1.3%, on a draw that had barely got faster. Re-profiling *after* a win, instead of trusting the original split, is what turned a measured 1.1x into ~100x. Three bottleneck guesses were wrong before measurement settled it — recorded because the guessing was the expensive part.
+- Consequence for planning: the 999 draws pre-registered and then cut to 199 on runtime grounds are **restored to 999**; the reduction never reached a result.
+
+### Two correctness bugs, both found by checks that existed for the purpose
+
+- **The pair cache is unsound and is now off by default.** It memoised visibility on `(chapel, wall, chapel, wall)`, assuming no third chapel's door matters — argued from a sightline needing two openings to cross a building. Chapels are modelled as **wall panels, not watertight solids**, so one opening plus a wall top or corner gap suffices. Cast exhaustively over 12 draws, **13 of 21,468 repeated four-tuples were answered differently: 6.1e-4**, enough to drift V by a few pairs per draw. The earlier "0 of 474 pairs, 0.000% sensitivity" check that licensed the cache had an expected count of **0.29** counterexamples at that rate — it could not have found this. `--cross-check 25` did. The memo bought only 1.1x once batching landed, so nothing is lost.
+- **N2/N3 were measuring an artefact and their first result was backwards.** They permuted chapel positions but translated geometry **in plan only**, so a moved chapel kept the elevation of the plot it came from. The necropolis spans **38.2 m of relief**; a random permutation misplaces the median chapel by **9.1 m against 3.6 m walls**, leaving **78% of the null's buildings hanging above their new ground or buried**. A floating chapel occludes nothing, so null V was inflated to 456/481 and both nulls read "arrangement does not matter" (effects -1.5/-1.9, p 0.83/1.0). Re-datumed onto the new ground, the same nulls give medians 252/264 and **effects +3.8/+3.3**. N1 never moves anything and reproduced **exactly** (median 270, p 0.001) across the fix, which is the control that says the re-datum touched only what it should.
+- Both are recorded as dated deviations in the script's pre-registration block rather than quietly applied. `DRAW_VERSION` now enters the checkpoint fingerprint, so a run resumed across a change in what a draw *means* is refused instead of splicing two experiments into one histogram.
+
+### The site-wide viewgraph, rerun as a graded series — step 3's headline is no longer stale
+
+The comparison report's aperture evidence had been a *citation* to a doors-only run of 2026-08-08, made when the registry held doors alone; it has since grown to **469 rows over 202 chapels (197 door + 93 window + 172 niche + 7 apse)**, and no viewgraph artifact on disk was newer than June 13. Rerun on the 0.4 m site surface, four variants built from the current registry at `--thickness-mode fabric --thin-rule legacy`, **202 meshes in every variant** so the building set never changes between steps (the confound that invalidated the first windowed sweep on 2026-08-12):
+
+| variant | ground cells | delta | centroid-visible | any-vertex |
+| --- | --- | --- | --- | --- |
+| `none` (solid control) | 36,520 | — | 8 | 74 |
+| `doors` | 36,657 | **+137** | **11 (+37.5%)** | 76 |
+| `perforating` (+ windows) | 37,858 | +1,201 | 11 (+0) | 77 |
+| `all` (+ niches, apses) | 37,858 | **+0** | 11 (+0) | 77 |
+
+- **Doors and windows do different jobs, and the graded series separates them for the first time.** Doors are worth only +137 ground cells but **+3 centroid-visible building pairs**; windows are worth **~9x more ground cells (+1,201) and not one additional centroid pair**. Mechanically that is what the geometry demands — a window sill sits above standing eye height, so a sightline through it rises into the chamber and lands high on the far wall, while a door spans floor level and is the only opening that puts a building's *interior centre* in view. The visibility **graph** is a door instrument; the raster is mostly a window instrument.
+- **Niches and apses change nothing, on every metric, exactly.** That is the recess gate proving itself on the real site: 179 recesses, zero perforations. It also independently corroborates 2026-08-13's finding that apses are visible from no other chapel.
+- **+137 cells and the +1,338 total both reproduce** the 2026-08-12 windowed sweep (+137 doors, +1,338 doors+windows) on a differently-built mesh set, which is a useful consistency check across two independent builds.
+- **Not comparable to 2026-08-08's absolutes**: `Marks_Brief2` holds **3** observers and this run yields 789 building-observer pairs (263 x 3), where that entry reported 1,052 (263 x 4). The fourth observer's provenance is unresolved — worth settling before quoting either figure to mentors. The graded series is internally matched regardless.
+- `compare_apertures.py` no longer hard-codes the stale 2026-08-08 sentence; the regenerated report cites this run. Outputs in `250_Apertures/viewgraph_vg/{none,doors,perforating,all}`.
+
+### Provenance audit: what the model rests on, and where it rests on nothing
+
+- **New `scripts/data_provenance.py` → `docs/DATA_PROVENANCE.md` + `data_provenance_by_chapel.csv`.** Generated, not written, because a hand-kept provenance note goes wrong the first time the registry is edited and goes wrong *silently* — a reader cannot tell a measured 0.86 m door from a class default of the same number. Walks all six registries (openings, fabric, directions, domes, paintings, targets) and fails its self-check if any provenance token or confidence grade lacks a documented meaning.
+- **The headline is `source_pos` answering the wrong question.** The column records which *wall* an opening sits in, not where along it — and the name invites the opposite reading. **Only 3 of 469 openings (chapels 23, 24, 25) have a sourced along-wall position**, all from CAD threshold marks; the other 466 come from a spacing rule. Anything depending on where along a wall an opening sits is therefore an artifact, which is the general form of the window-frames-a-niche result already retracted on 2026-08-13.
+- **466 of 469 openings carry class-default dimensions**, and `source_dims` contains **no plate-derived rows at all** — the human pass to read sill/head heights off the report's plan+elevation plates never happened, so every height in the model is a default, including all 197 door heads at 2.10 m. The fresco bound survives this by construction (it uses the most favourable head height and still finds the dome out of sight); a height-sensitive result would not.
+- Nine gaps documented G1–G9, including one that was a *counting* error rather than a data one: `painting_inventory.csv` holds one row per anchor **mention**, and the report describes most scenes more than once, so its 38 rows are **27 distinct scenes** (17 in chapel 30, 10 in chapel 80). The first draft of the audit reported rows as scenes and disagreed with the 2026-08-13 entry; corrected, and 17 of the 27 scenes turn out never to be anchored to a fixed surface in any mention.
+
+### Also landed
+
+- **`scripts/visible_fraction.py`** — visibility as a *fraction* of a surface rather than a boolean, by adaptive subdivision (seed coarsely, refine only intervals whose endpoints disagree). This is Whitted-style adaptive supersampling, not bisection: visibility along a wall is **not monotone**, and a plain endpoint bisection reports one boundary confidently and wrongly when a chapel shadows a wall's middle. 10/10 analytic self-checks, including that failure case, the `tol/2` error bound over 360 boundary positions, and an **asserted** limitation — a shadow band narrower than the seed spacing is missed, so `n_seed` is documented and every call returns its unresolved count.
+- Docs: `CODE_WALKTHROUGH.md` gains the many-observer path, why it inverts the single-eye kernel's choices, and four gotcha rows (geometry-keyed local frame, the deliberate un-culling, the cache).
+
+### Open
+
+- **The local frame for a batched mesh cast must key on geometry, never on the rays.** Anchoring it on the mean eye made results depend on *which* rays were in the batch, so a memoising caller and an exhaustive one disagreed on edge-grazing rays through float32 rounding alone — a bug that presents exactly like cache staleness and is not. Fixed to the triangles' bounding-box centre; worth remembering before any further batching.
+- Chapel 80 and the per-point floor datum (below) are both still open, and the floor datum is the same class of problem as the N2/N3 bug — a z-reference taken per-point where it should be per-chapel.
+
 ## 2026-08-13 (later) — Interior features made into *targets*; the frescoes are on the dome and out of reach from outside
 
 - **New `scripts/test_feature_visibility.py`.** Niches and apses stop being occluders and become the things looked at. Observers stand 1.5 m outside an opening on its axis at 1.5 m eye height; external observers are other chapels' door stations within 60 m. Of **175 interior features on 79 chapels: 44 (25%) are visible from their own doorway, 26 (15%) from another chapel, 121 (69%) from nowhere tested.** Apses do worse than niches — 2 of 7 from their own door, **0 from any other chapel**.

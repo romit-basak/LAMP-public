@@ -16,6 +16,20 @@ That's **~5 weeks** to the standard deadline, or **~15.5 weeks** if the extensio
 
 ## Verdict: not on track for the *complete* proposal deliverable by Aug 17
 
+> **Status 2026-08-14 — this verdict is superseded; steps 1–3 all landed.**
+> Written a month ago, when step 2 had zero implementation. Since then the
+> aperture pipeline shipped (registry of 469 openings over 202 chapels), the
+> site-wide graded viewgraph ran, and the pre-registered intentionality test
+> rejected all three nulls at p = 0.001. See
+> [`GSOC_WORK_PRODUCT.md`](GSOC_WORK_PRODUCT.md) for the checkpoint write-up.
+> What remains open from the list below is **item 3 (the full observer point
+> set)**, still mentor-blocked and still gating every site-wide number, and the
+> `--domes` sign-off in item 4. The stretch items in 5 are genuinely next.
+> One contingency can be struck: **BVH is not needed** — the site totals 7,376
+> triangles, and batching the ray cast took a draw from 104 s to 0.65 s.
+
+The paragraph below is kept as written, for the record.
+
 Be precise about what "the deliverable" is. CLAUDE.md's scope section states it plainly: *"The assigned deliverable is true 3D ray-cast visibility analysis **with building apertures**... a corrected, aperture-aware **visibility graph**."* Checking the repo against that:
 
 - ✅ **Step 1 — 3D ray-casting engine.** Done, and substantially over-built beyond what the proposal asked for: view cone (`--pitch`/`--vfov`), 3D visibility volume (+ now a surface-mesh export), configurable eye height, dome caps, first-person observer snapshots, and a Blender/Unity export pipeline. None of the visualization extras (Blender, Unity, volume mesh, observer-view renders) were required by the proposal — they're additive polish, not deliverable-gating.
