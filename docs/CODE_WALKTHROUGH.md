@@ -982,6 +982,35 @@ the hand-written hillshade:
   than adding the `tabulate` package as a dependency for one generated
   report.
 
+**Regenerating the baseline instead of inheriting it.**
+`run_grass_viewshed.py` produces a fresh `r.viewshed` run at native
+0.4 m, and `crop_task2_04m.py` cuts the canonical site-wide rasters down
+to the same ROI. The reason to bother: the supplied baseline is a 1.5 m
+subset, and at that cell size a ~4 m chapel spans fewer than three
+cells, so **both** methods under-represent building occlusion and the
+comparison partly measures the grid rather than the algorithms. Running
+both sides at 0.4 m separates those. It also isolates a residual that
+would otherwise look like disagreement: the heightfield's building edges
+are bilinearly interpolated ramps between cell centres while a mesh
+stands a true vertical wall on the footprint boundary, and that
+silhouette-quantisation term is 15.2% of visible ground at 1.5 m and
+falls under 1% at 0.4 m. Scaling with cell size is what identifies it as
+discretisation rather than a modelling disagreement.
+
+**`compare_apertures.py` — and knowing what a metric cannot see.** It
+sweeps solid / doorless / apertured meshes (and domes on-off) against
+the same baseline. Its most useful output is a **negative** one,
+reported rather than buried: the door effect here is *structurally*
+zero, because `target_grid` pins every target's height once from the
+with-buildings DEM, so a cell inside a footprint is always tested at
+**roof** height in every variant, and a ground-level door can never flip
+it. No number of extra observers or buildings fixes that. The report
+says so in its own text and points at the visibility graph — which
+evaluates centroid visibility at true interior floor height — as the
+metric that does register doors. Counting ground cells only is a
+correction for the same reason: 77–92% of bare-vs-doorless flips fall
+*inside* footprints, biasing every mesh variant regardless of apertures.
+
 ---
 
 ## 6. `volume_convert.py` — post-processing without recompute
@@ -1190,6 +1219,19 @@ now wrapped in a `try/except ImportError` (falling back to `bpy = None`) so
 the module's `build_parser()` — argument parsing only, no Blender calls —
 can be imported from the plain repo venv too. Nothing that actually touches
 `bpy` runs unless the module is genuinely executing inside Blender.
+
+**The walkable variant, and why the DEM choice is a trap.**
+`export_walkable_scene.py` + `blender/build_walkable_scene.py` build a
+scene you can walk through at eye level, placing the **real chapel
+meshes** rather than the extruded heightfield blocks — so doorways are
+doorways and you can stand in one. The trap is which surface to use for
+the ground: it must be the **bare** DEM, not the DEM-with-buildings.
+Using the latter would put buildings in the terrain *and* place meshes
+on top of them, so every chapel would sit on a plinth of its own
+extruded footprint. Same reason `viewshed.py --mesh` needs
+`--mesh-clear-ids`. `--step` decimates the terrain because a walkable
+scene wants a frame rate, not 0.4 m fidelity — and that is safe here
+precisely because this tier is presentation, never evidence.
 
 ---
 
@@ -1433,7 +1475,7 @@ its apparent wall-line gaps are dominated by registration artifacts at
 footprint corners, and the one chapel we ground-truthed (180) has
 *unbroken* linework across its real entrance. The report, meanwhile,
 simply says so in words — "(212) A chapel of Type 1 which opens
-south" — for 186 of 263 chapels. `read_report_directions.py` OCRs
+south" — for 194 of 263 chapels. `read_report_directions.py` OCRs
 Chapter VII with tesseract (psm 3, which keeps the centred `(NNN)`
 headings on their own lines where psm 6 swallows them), splits into
 per-chapel entries, and matches direction phrases anchored on
@@ -1469,6 +1511,71 @@ door), and circular buildings defeat the interior-gap test entirely —
 both degrade to the same fallback, the per-chapel QC tile a human
 reads anyway. Candidates are seeds marked `confidence=low`, not truth.
 
+**Reading the rest of the report: features, paintings, plates.** The
+same OCR'd chapters carry more than entrances, and each reader is a
+separate script because each needs a different kind of scepticism.
+`read_report_features.py` pulls interior features (niches, apses,
+windows) with the wall they sit in, and reads **four page ranges**, not
+one — chapels written up at length elsewhere have bare cross-references
+in Ch. VII ("described above p. 77-86"), so their detail lives in the
+monographic chapters, and each range restarts the numbering, so the
+increasing-order heading filter is applied *per range*.
+`read_report_paintings.py` pulls named painted scenes; its `--crossval`
+compares the parsed running order against the report's own printed
+order (17/17), which is real evidence precisely because Fakhry listing
+his scenes does not depend on the headings the parser finds.
+`extract_plate_figures.py` cuts measurable per-chapel tiles out of the
+plates, and `extract_site_cad.py` / `extract_dxf_plans.py` take door
+positions and widths off the CAD where the LW2 threshold-mark
+convention makes them explicit.
+
+**Curation is a separate step from extraction, on purpose.**
+`apertures_from_report.py`, `curate_windows.py` and `curate_niches.py`
+are what promote candidates into registry rows, and they are where the
+modelling assumptions get made explicit rather than smuggled in. Two
+worth knowing:
+
+- **Niche dimensions are n = 1.** The report dimensions exactly *one*
+  niche in 263 chapels and states a sill height exactly once. The
+  `NICHE_*` constants therefore carry a comment saying plainly that
+  they are a single observation standing in for a class. Sweep them
+  before quoting any niche-driven result.
+- **The depth clamp fires, and it was measured, not assumed.** A 0.15 m
+  recess in a one-brick (0.17 m) wall would leave 0.02 m of fabric, and
+  any rounding turns a decorative niche into a hole through the chapel.
+  The clamp fired 34 times on the real registry; four more recesses
+  were dropped outright on zero-thickness walls. Then verified
+  directly — 25 real niches probed with a ray from 6 m outside, level
+  with the niche: **0 let a ray through**.
+
+**`measure_wall_fabric.py` — thickness is not cosmetic.** It sets how
+deep an opening's reveal is, which is what clips an oblique sightline
+through it, so a wrong thickness changes visibility rather than just
+appearance. The script measures from the CAD plans and the report plate
+plans and falls back to typology, recording which of the three each
+chapel got (`thickness_source`) so the weak ones stay identifiable —
+44 chapels have only a site-wide default, and only 5 are CAD-measured.
+It writes `building_fabric_candidates.csv`, never the curated file.
+
+**`check_regression.py` — the gate that makes refactoring safe.** The
+mesh pipeline has many small shared functions (`canonical_walls`,
+`opening_rect`, `built_thickness`), and the failure mode when one drifts
+is not an exception, it is a slightly different hole in a wall that
+nothing downstream notices. So the frozen 197 meshes are hashed, and
+any change to the registry or the builder must leave them **byte
+identical** or explain why. It is what let `opening_rect()` be lifted
+out of the builder's inline block with confidence: same bytes, so the
+sightline test and the mesh cannot have started disagreeing.
+
+**Targets and envelopes.** `build_visual_targets.py` turns the registry
+into the named things a ray can be *aimed at* (`target_inventory.csv`):
+entrance-axis points, footprint centroids, and recess targets placed
+inside the pocket at mid-depth. `aperture_envelope.py` runs the
+question backwards — given one chapel, sweep standing positions around
+it and report the envelope from which its interior is visible through
+its own openings. The first feeds the statistical tests in §12; the
+second is for looking at one building closely.
+
 **The wall builder.** `wall_panel()` generalizes the synthetic
 builder's axis-aligned panels: parametrized by distance along
 arbitrary 2D endpoints, multiple holes per wall (sorted; inter-hole
@@ -1495,6 +1602,190 @@ blocked; first hit on the far inner wall at exactly
 10 + 10 − 0.4 m). Run it after any change to this pipeline — it
 exercises registry semantics, wall geometry, and the hybrid engine in
 one pass with zero real data.
+
+---
+
+## 12. The analysis tier — where the findings actually come from
+
+Everything above builds a scene and answers "is this visible". This
+tier asks questions *of* the site, and it is where every number in
+`GSOC_WORK_PRODUCT.md` originates. Its scripts share a shape: each is a
+driver that loads the registries, casts against a `HybridScene`, and
+writes a report plus figures. What differs is the epistemics, and that
+is what this section is about.
+
+### 12.1 `test_entrance_azimuth.py` — constrain before you compute
+
+The cheapest script in the tier and deliberately the first to run: it
+loads no meshes and casts no rays. It asks whether the *compass
+distribution* of entrances is explained by something other than the
+other chapels, testing three rival explanations.
+
+- **Solar.** Not "does it face east" — the sun's rising point sweeps an
+  arc over the year, and `solar_arcs()` derives it from
+  `cos(A) = sin(d)/cos(φ)` with declination at the solstices. At
+  Kharga's φ = 25.44° that is 63.9°–116.1°. The null draws uniformly
+  from inside the arc(s).
+- **Uniform** over the 8 compass classes.
+- **Downhill slope** — the practical explanation: on a slope the
+  downhill side is the approach, so doors might simply face it.
+
+Two decisions are worth copying. First, **no Rayleigh/V-test**: on four
+spikes at 90° spacing the resultant reflects the 45° binning rather
+than the archaeology, and it is the error a reviewer looks for first.
+Second, the slope null is a **permutation** test rather than an
+analytic one, because entrance directions are binned at 45° while
+aspect is continuous, so how many classes fall inside a 45° window
+depends on where the aspect sits — a closed-form chance level would be
+subtly wrong. Shuffling the observed directions across chapels holds
+both marginals fixed and breaks only the pairing.
+
+All three reject. That is what makes §12.2 worth running: it means the
+lopsided distribution is not already explained.
+
+### 12.2 `test_intentionality.py` — a pre-registered experiment
+
+The statistic is V: ordered chapel pairs where B's interior entrance-axis
+point is visible from a standing position outside A's doorway. The
+nulls permute door walls (N1), positions (N2), or both (N3).
+
+**The module docstring is a pre-registration, and it is load-bearing.**
+Statistic, α, correction and null definitions were fixed there before
+the first run, and every subsequent change is appended as a dated
+deviation rather than edited in. That is the only thing separating this
+from tuning an analysis until it reports something. If you change what
+a draw means, record it there — and bump `DRAW_VERSION`.
+
+Four design points that generalise:
+
+- **N1 reuses the observed directions rather than drawing walls
+  uniformly.** A uniform draw would randomise the compass distribution
+  too, and the test would reject because no chapel opens north — a fact
+  §12.1 already established, and nothing to do with arrangement.
+  Preserving the marginal is what makes the test about *which chapel
+  got which direction*.
+- **Per-draw seeding** is `(seed, stream_id, draw_index)`, not one
+  running generator. A resumed run re-derives draw *k* exactly, so the
+  checkpoint carries no RNG state.
+- **Sequential stopping** (Besag–Clifford): a null halts at the h-th
+  exceedance and reports `p = h/L`; one that goes the distance keeps
+  `(1+l)/(1+n)`. Switching formulas *with the stopping reason* is what
+  makes this exact rather than peeking.
+- **`DRAW_VERSION` is in the checkpoint fingerprint.** The fingerprint
+  covers configuration; it did not cover *semantics*, so a run resumed
+  across a change in what a draw means would have spliced two
+  experiments into one null distribution and looked fine doing it.
+
+### 12.3 Two bugs this tier caught, and why they are instructive
+
+Both were found by checks that existed for the purpose, and both are
+recorded rather than quietly patched.
+
+**The pair cache was unsound.** It memoised visibility on
+`(chapel, wall, chapel, wall)`, on the argument that a sightline
+crossing a third chapel C needs two openings while C has one. That
+holds for a watertight solid. Chapels are modelled as **wall panels** —
+open-topped, with corner gaps — so a ray can take one opening and leave
+over a wall top. Cast exhaustively, 13 of 21,468 repeated keys
+disagreed: 6.1e-4. The earlier check that licensed the cache compared
+474 pairs and found none, which at that rate expects 0.29
+counterexamples — it could not have found this. **A test that cannot
+detect the thing it is testing for is worse than no test**, because it
+converts an assumption into a citation.
+
+**N2/N3 measured an artefact.** They permuted positions in plan only,
+so a relocated chapel kept the elevation it came from. The necropolis
+spans 38 m of relief; the median permuted chapel ended up 9.1 m off its
+new ground against 3.6 m walls, and a floating chapel occludes nothing.
+Null V inflated, and both nulls reported "arrangement does not matter"
+for a purely mechanical reason. The control that proves the fix is
+surgical: **N1 moves nothing and reproduced exactly across it.**
+
+The general lesson is that a null hypothesis is a piece of *geometry*
+here, not a formality. Getting it wrong produces a confident number
+pointing the wrong way, and no statistical check downstream will catch
+it — only looking at what the null scene physically is.
+
+### 12.4 `test_feature_visibility.py` / `test_painting_visibility.py`
+
+These turn interior features from *occluders* into *targets*: not "does
+this niche block a ray" but "can this niche be seen, and from where".
+Observers stand 1.5 m outside an opening on its axis; external
+observers are other chapels' door stations within 60 m.
+
+Two habits from these are worth carrying:
+
+- **The target must agree with the mesh about where the opening is, to
+  the millimetre.** Both call `opening_rect()` in `aperture_registry.py`
+  — extracted from the wall builder's inline block precisely so a second
+  implementation could not quietly disagree. Recess targets sit *inside*
+  the pocket at mid-depth, mirroring the builder's face convention;
+  placing them out in the room would make the pocket's own reveal
+  irrelevant and count a niche as seen from angles that only ever saw
+  the wall beside it.
+- **`test_painting_visibility.py` computes a bound, not a measurement.**
+  It asks how high a sightline can rise inside the chamber given the
+  door head, and compares that to the dome's springing line. Every
+  choice is set to favour visibility — empty chamber, observer free to
+  stand anywhere on the axis, the registry's most generous head height
+  — so when it still finds the painted surface out of reach (1.41 m
+  against 2.49 m), the conclusion survives the fact that **no opening
+  height in the registry is measured**. Building a result to be robust
+  to your worst data is cheaper than fixing the data first.
+
+### 12.5 `visible_fraction.py` — and why it is not a bisection
+
+Every other visibility answer in the project is boolean. This one asks
+what *fraction* of a surface is visible.
+
+The obvious implementation is a binary search: cast to both ends of a
+wall, and if they disagree, bisect for the boundary. It is wrong here,
+and the reason is worth stating plainly — **visibility along a wall is
+not monotone.** A chapel standing in front can shadow the *middle* of a
+wall while both ends stay visible; several occluders give several
+bands. Bisection between two disagreeing endpoints finds one boundary,
+assumes it is the only one, and returns a confident wrong number. Worse,
+when both endpoints *agree*, it reports 1.0 and never looks.
+
+So the search seeds a coarse uniform sample first and refines only the
+intervals whose endpoints disagree — Whitted-style adaptive
+supersampling. With one boundary it degenerates to exactly the
+bisection above; with k boundaries it finds all of them, *provided* no
+shadow band falls entirely between two seeds. That proviso is a real
+assumption, so `n_seed` is a documented argument, the residual is
+returned rather than hidden (every call reports how many intervals were
+unresolved, each worth at most `tol/2` of length), and the self-test
+**asserts the failure mode** instead of pretending it away.
+
+### 12.6 `data_provenance.py` — generated, because prose drifts
+
+Walks all six registries and writes `docs/DATA_PROVENANCE.md` plus a
+per-chapel CSV. It is generated rather than written because a hand-kept
+provenance note is wrong the first time anyone edits a registry, and
+wrong *silently*: a reader cannot tell a measured 0.86 m door from a
+class default of the same number.
+
+Two details worth copying:
+
+- **The vocabularies are data, and unknown values fail loudly.**
+  `TOKENS` (sources) and `GRADES` (confidence) are separate dicts —
+  rendering a grade through the source table would file "med" under
+  "what it rests on" and read as though a grade were a document — and
+  `main` fails its self-check if any registry value is missing from
+  either. A new token surfaces as an error rather than a blank cell.
+- **The denominator comes from the footprints, not the registries.**
+  The chapels missing from every registry are exactly what the report
+  is for; counting only chapels that appear somewhere would divide the
+  gaps by themselves and report full coverage. When the footprint layer
+  is unreadable the caller falls back to the registry union and
+  **warns**, because that fallback silently changes what the
+  percentages are a share of.
+
+The report's own headline is a naming problem it exists to correct:
+`source_pos` records which *wall* an opening sits in, not where along
+it. Only 3 of 469 openings have a sourced along-wall position. Anything
+depending on finer placement is an artefact of a spacing rule — which
+is how the "window frames a niche" result was caught and retracted.
 
 ---
 

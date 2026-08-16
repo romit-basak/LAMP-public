@@ -25,7 +25,7 @@ import collections
 import csv
 from pathlib import Path
 
-from sanity_checks import check, failures
+from sanity_checks import check, warn, failures
 
 ROOT = Path(__file__).resolve().parents[1] / "LAMP_DataStore/ElBagawat"
 APERTURES = ROOT / "200_Projects/250_Apertures"
@@ -142,6 +142,18 @@ def count_table(rows, col, total, title, label="value"):
 
 
 def footprint_ids():
+    """Every chapel that exists, from the footprint layer, or empty.
+
+    The denominator has to come from the footprints rather than from
+    the registries, because the chapels missing from every registry are
+    exactly what this report is for. Counting only chapels that appear
+    somewhere would divide the gaps by themselves and report full
+    coverage.
+
+    Returns an empty set when the layer or geopandas is unavailable, so
+    the report can still be generated; the caller falls back to the
+    registry union and warns, since that fallback quietly changes what
+    the percentages are a share of."""
     try:
         import geopandas as gpd
     except ImportError:
@@ -196,6 +208,20 @@ def per_chapel(ap, fab, dirs, dome, paint, all_ids):
 
 
 def build_report(ap, fab, dirs, dome, paint, tgt, all_ids, chapel_rows):
+    """The whole document, as a list of markdown lines.
+
+    Nine sections: the source documents and what each can and cannot
+    give, then one section per registry rendering its provenance
+    columns, then the gaps. Built as one function because the sections
+    share derived counts — the same three chapel sets feed section 3
+    and gap G3, and splitting them would either recompute or pass a
+    growing bag of totals between helpers.
+
+    The gap numbers are all computed here rather than written into the
+    prose, so a registry edit moves the text; the only hand-written
+    figures are the ones sourced from outside the registries (the
+    floor-datum spread, the 46 undescribed chapels), which are marked
+    as such where they appear."""
     n_ap, n_ch = len(ap), len(all_ids)
     ap_ids = ids_in(ap)
     dir_ids = ids_in(dirs)
@@ -487,7 +513,13 @@ def main():
     check(len(ap) > 400, "openings registry loaded", f"{len(ap)} rows")
     check(len(fab) > 200, "wall fabric loaded", f"{len(fab)} rows")
 
-    all_ids = footprint_ids() or (ids_in(ap) | ids_in(fab) | ids_in(dome))
+    all_ids = footprint_ids()
+    if not all_ids:
+        all_ids = ids_in(ap) | ids_in(fab) | ids_in(dome)
+        warn("chapel id universe fell back to the registry union",
+             f"{len(all_ids)} chapels — footprint layer unreadable, so "
+             "every coverage share below is a share of chapels that "
+             "appear in some registry, not of chapels that exist")
     check(len(all_ids) > 200, "chapel id universe resolved",
           f"{len(all_ids)} chapels")
 

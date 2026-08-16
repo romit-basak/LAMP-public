@@ -357,7 +357,7 @@ tested against the report's stated directions they agree 36% against a
 OCRs Chapter VII (`tesseract`, ~2.3 s/page, cached to
 `report_plates/ocr/`) and pulls each chapel's stated entrance
 direction from sentences like *"A chapel of Type 1 which opens
-south"*, keeping the quote and book page for audit. **186 of 263
+south"*, keeping the quote and book page for audit. **194 of 263
 chapels (71%)** yield a direction this way; validated 6/6 against
 pages read by eye. Chapels whose entry states no direction are listed
 so they can be chased by hand.
@@ -399,7 +399,109 @@ statistics for updating the documented defaults (provisional: width
     --ids 18001 18002 18101 $(cat .../meshes/mesh_args.txt) --no-graph
 ```
 
-### `scripts/volume_convert.py`
+### The aperture pipeline, in order
+
+Sources → candidates → curated registry → meshes. **Extraction scripts never
+write `aperture_inventory.csv`** — they emit `*_candidates.csv` and a human
+merges. That rule is what lets you re-run any extractor without losing hand
+edits.
+
+| # | Script | Does |
+|---|---|---|
+| 1 | `extract_report_plates.py` | Cuts the 200 report page scans + contact sheets |
+| 2 | `extract_plate_figures.py` | Cuts measurable per-chapel tiles out of those figures |
+| 3 | `read_report_directions.py` | OCRs Ch. VII for stated entrance directions → `entrance_directions.csv` |
+| 4 | `read_report_features.py` | Interior features (niches, apses, windows) from Ch. VII prose |
+| 5 | `read_report_paintings.py` | Named painted scenes and where on the building they sit |
+| 6 | `extract_site_cad.py` / `extract_dxf_plans.py` | Measured door positions/widths off the CAD (LW2 threshold marks) |
+| 7 | `apertures_from_report.py` | Turns stated directions into registry door rows |
+| 8 | `curate_windows.py` / `curate_niches.py` | Promote wall-anchored candidates into registry rows |
+| 9 | `build_aperture_walls.py` | Registry → per-building OBJ meshes + `mesh_args.txt` |
+
+```bash
+.venv/bin/python scripts/read_report_directions.py      # → entrance_directions.csv
+.venv/bin/python scripts/apertures_from_report.py       # → registry door rows
+.venv/bin/python scripts/curate_windows.py              # then curate_niches.py
+.venv/bin/python scripts/build_aperture_walls.py --openings all \
+    --thickness-mode fabric --thin-rule legacy
+```
+
+`read_report_paintings.py --crossval` re-checks the parsed scene order against
+the report's own printed running order (17/17) — run it after any parser change.
+
+### `scripts/measure_wall_fabric.py` — per-building wall thickness
+
+Measures wall thickness from the CAD plans and the report plate plans, falling
+back to typology. Thickness sets how deep an opening's reveal is, which is what
+clips oblique sightlines through it.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--cad-dir` / `--plate-index` | datastore | Measurement sources |
+| `--no-plates` | off | Skip plate measurement (slow: each plate is rasterised) |
+| `--out` | `building_fabric_candidates.csv` | **Candidates** — the curated `building_fabric.csv` is never overwritten |
+
+```bash
+.venv/bin/python scripts/measure_wall_fabric.py
+```
+
+### `scripts/check_regression.py` — the frozen baseline gate
+
+Asserts the frozen mesh baseline still reproduces **byte for byte**. Run after
+any change to the registry, `aperture_registry.py` or `build_aperture_walls.py`.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--frozen` | `viewshed_runs/frozen_baseline_20260811` | Baseline holding the `.sha256` manifests |
+| `--only` | all | Restrict to named artefact groups, e.g. `meshes` |
+
+```bash
+.venv/bin/python scripts/check_regression.py --only meshes
+```
+
+Expect `every mesh byte-identical — 0 changed`. The "5 unexpected meshes"
+failure is **pre-existing and expected**: chapels 66, 126, 136, 162 and 206
+have apertures but no stated entrance, so they exist in the 202-chapel set and
+not in the frozen 197.
+
+### `scripts/build_visual_targets.py` — the things worth seeing
+
+Turns registry openings and interior features into named ray-cast targets
+(`target_inventory.csv`): entrance-axis points, footprint centroids, and
+recess targets that sit *inside* the pocket at mid-depth.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--kinds` | all four | `entrance_axis`, `centroid`, `apse`, `niche` |
+| `--fabric` | `building_fabric.csv` | Per-building thickness; sets how deep a recess target sits |
+| `--min-headroom` | — | Drop targets with less clearance than this |
+
+```bash
+.venv/bin/python scripts/build_visual_targets.py
+```
+
+### `scripts/aperture_envelope.py` — from where outside can you see in?
+
+Sweeps standing positions around one chapel and reports the envelope from
+which its interior is visible through its own openings.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--id` | — | Chapel to stand outside of |
+| `--mesh-dir` | `meshes` | Which wall-fabric mesh set to measure |
+| `--neighbour-radius` | — | How far out to include occluding neighbours |
+
+```bash
+.venv/bin/python scripts/aperture_envelope.py --id 180
+```
+
+### `scripts/volume_convert.py` / `scripts/volume_mesh.py`
+
+`volume_convert.py` re-exports an existing visibility volume into another
+format without recomputing it. `volume_mesh.py` is the library behind
+`viewshed.py --volume-format mesh`: it extracts the volume's **boundary
+surface** as a PLY, either `blocky` (exact voxel faces) or `smooth`
+(marching cubes). Not a driver — there is no CLI.
 
 Promotes a saved `--volume` CSV into other formats without recomputing the
 ray-casting.
@@ -425,6 +527,31 @@ terrain-following shape comes from `viewshed.py --volume-format mesh`
     --to laz --crs EPSG:32636
 ```
 
+### `scripts/run_grass_viewshed.py` — regenerate the GRASS baseline
+
+Produces a fresh `r.viewshed` baseline at native 0.4 m instead of the
+user-supplied 1.5 m ROI run. Needs GRASS on `PATH`.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--dem` | Task_2 0.4 m crop | Surface to run the baseline on |
+| `--eye-heights` | `1.5 1.75` | Heights to generate |
+| `--out-dir` | `Task_2/` | Where the baseline rasters land |
+
+```bash
+.venv/bin/python scripts/run_grass_viewshed.py
+```
+
+### `scripts/crop_task2_04m.py` — Task_2 ROI at 0.4 m
+
+Crops the canonical site-wide 0.4 m rasters (DEM, bare earth, orthophoto) to
+the Task_2 ROI so the baseline and the engine can be compared at native
+resolution rather than at the 1.5 m subset's.
+
+```bash
+.venv/bin/python scripts/crop_task2_04m.py
+```
+
 ### `scripts/compare_baseline.py`
 
 Validates the engine against the user's GRASS `r.viewshed` baseline
@@ -442,6 +569,114 @@ Validates the engine against the user's GRASS `r.viewshed` baseline
 
 ```bash
 .venv/bin/python scripts/compare_baseline.py
+```
+
+### `scripts/compare_apertures.py` — aperture-aware vs baseline
+
+Sweeps solid / doorless / apertured meshes (and domes on-off) against the
+r.viewshed baseline on the Task_2 ROI. **Counts ground cells only**: a cell
+inside a footprint gets its target pinned at the block's roof height, which
+biases every mesh variant regardless of apertures. Read the generated report's
+own caveat before quoting its `door_effect` — it is structurally zero here,
+and the visibility graph is the metric that registers doors.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--baseline-dir` | `Task_2/` | Baseline data directory |
+| `--out-dir` | `Task_2/comparison` | Report + figures output |
+| `--eye-heights` | `1.5 1.75` | Eye heights (m) to sweep |
+| `--mesh-suffix` | — | Which `meshes*` variant set to read |
+
+```bash
+.venv/bin/python scripts/compare_apertures.py --out-dir Task_2/comparison_all_fabric
+```
+
+### `scripts/test_intentionality.py` — were the entrances arranged?
+
+**Pre-registered** Monte Carlo test: counts ordered chapel pairs where one
+interior is visible from outside another's doorway, against nulls that
+permute door walls (N1), positions (N2) or both (N3). The pre-registration
+and every dated deviation live in the module docstring — read it before
+changing anything here.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--n-draws` | `999` | Draws per null |
+| `--nulls` | `N1 N2 N3` | Which nulls to run |
+| `--radius` | `60` | Max observer–target distance (m) |
+| `--seed` | `20260813` | Per-draw seeding is `(seed, stream, draw)` — resume re-derives, no RNG state |
+| `--sequential-h` | `10` | Stop a null after H draws reach V_obs (Besag–Clifford); `0` disables |
+| `--checkpoint` / `--resume` | out-dir | Pause-safe; a resume is refused if config or `DRAW_VERSION` differs |
+| `--pair-cache` | **off** | Memoisation kept only to reproduce its own unsoundness (6.1e-4); leave off |
+| `--cross-check K` | — | Cached vs exhaustive on K draws. **Expected to fail** — that failure is the finding |
+
+```bash
+.venv/bin/python scripts/test_intentionality.py --n-draws 999 --nulls N1 N2 N3 --sequential-h 10
+```
+
+### `scripts/test_entrance_azimuth.py` — orientation nulls
+
+Tests the compass distribution of entrances against solar (sunrise, and
+sunrise+sunset arcs computed for Kharga's latitude), uniform, and
+downhill-slope nulls. Casts no rays and loads no meshes — it constrains the
+explanation space cheaply before any expensive run.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--directions` | `250_Apertures/entrance_directions.csv` | Stated entrance directions |
+| `--alpha` | `0.01` | Pre-registered one-sided level |
+
+```bash
+.venv/bin/python scripts/test_entrance_azimuth.py
+```
+
+### `scripts/test_feature_visibility.py` — are niches and apses seen?
+
+Treats interior features as *targets* rather than occluders: can this niche be
+seen from its own doorway, and from other chapels? Observers stand 1.5 m
+outside an opening on its axis; external observers are other chapels' door
+stations within 60 m.
+
+```bash
+.venv/bin/python scripts/test_feature_visibility.py
+```
+
+### `scripts/test_painting_visibility.py` — can the frescoes be seen from outside?
+
+Computes a **bound**, not a measurement: how high a sightline can rise inside
+the chamber given the door head, against the dome's springing line. Every
+choice favours visibility (empty chamber, observer anywhere on the axis, the
+registry's most generous head height), so a negative result survives the fact
+that no opening height in the registry is measured.
+
+```bash
+.venv/bin/python scripts/test_painting_visibility.py
+```
+
+### `scripts/visible_fraction.py` — how much of a surface is visible
+
+Library, not a driver: `visible_fraction(scene, eye, p0, p1)` returns what
+fraction of a segment is visible and which parts, by adaptive subdivision.
+Seeds a coarse sample, then refines only intervals whose endpoints disagree —
+a plain endpoint bisection is wrong here, because visibility along a wall is
+**not monotone** (a chapel in front can shadow a wall's middle while both ends
+stay visible). Every call reports how many boundaries the depth limit did not
+resolve.
+
+```bash
+.venv/bin/python scripts/visible_fraction.py --self-test
+```
+
+### `scripts/data_provenance.py` — what each fact rests on
+
+Walks all six registries and writes `docs/DATA_PROVENANCE.md` plus a
+per-chapel CSV: which document supplied each entrance, opening, thickness,
+dome and painting, and the nine gaps where nothing did. Fails its self-check
+if any provenance token or confidence grade lacks a documented meaning, so a
+new token in a registry surfaces instead of rendering as a blank cell.
+
+```bash
+.venv/bin/python scripts/data_provenance.py
 ```
 
 ### `scripts/export_scene_bundle.py` — Blender/Unity export
@@ -462,6 +697,25 @@ as geometry, never baked into the heightmap.
 
 ```bash
 .venv/bin/python scripts/export_scene_bundle.py --unity
+```
+
+### `scripts/export_walkable_scene.py` + `blender/build_walkable_scene.py`
+
+Exports bare ground plus the **real chapel meshes** (not the extruded
+heightfield blocks) as a scene you can walk through in Blender — the
+qualitative counterpart to the numeric viewsheds. Presentation tier, never
+evidence.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--bare-dem` | 0.4 m bare earth | Ground surface — must be **bare** earth, not the DEM-with-buildings |
+| `--mesh-dir` | `meshes` | Which built chapel meshes to place |
+| `--step` | `1` | Terrain decimation; 1 = native 0.4 m |
+| `--margin` | — | Ground margin (m) beyond the footprints |
+
+```bash
+.venv/bin/python scripts/export_walkable_scene.py
+blender --python blender/build_walkable_scene.py
 ```
 
 ### `blender/build_bagawat_scene.py` — Cycles renders
