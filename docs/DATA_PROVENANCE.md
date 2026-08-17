@@ -20,6 +20,8 @@ Covers **263 chapels** and **469 openings**. Every number in the visibility resu
 
 469 openings over 202 chapels: 197 door, 172 niche, 93 window, 7 apse.
 
+**Terminology.** *Opening* is the umbrella and the unit of this registry. A **perforating opening** (`door`, `window`) passes through the wall; a **recess** (`niche`, `apse`) is cut into a face and does not. Note that the excavation report uses *aperture* narrowly, for a light opening — a window — so the umbrella sense carried by the file and path names is this project's, not the source's.
+
 **`source_pos` answers *which wall*, not *where along it*.* This is the single most important thing to understand about the registry, and the column name invites the opposite reading. A row marked `report` means the excavation report named the wall — the report never gives an along-wall position for any opening in any chapel.
 
 **source_pos — provenance of the WALL attribution**

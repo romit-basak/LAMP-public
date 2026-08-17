@@ -268,6 +268,14 @@ def build_report(ap, fab, dirs, dome, paint, tgt, all_ids, chapel_rows):
          f"{n_ap} openings over {len(ap_ids)} chapels: "
          + ", ".join(f"{v} {k}" for k, v in kinds.most_common()) + ".",
          "",
+         "**Terminology.** *Opening* is the umbrella and the unit of "
+         "this registry. A **perforating opening** (`door`, `window`) "
+         "passes through the wall; a **recess** (`niche`, `apse`) is "
+         "cut into a face and does not. Note that the excavation "
+         "report uses *aperture* narrowly, for a light opening — a "
+         "window — so the umbrella sense carried by the file and path "
+         "names is this project's, not the source's.",
+         "",
          "**`source_pos` answers *which wall*, not *where along it*.* "
          "This is the single most important thing to understand about "
          "the registry, and the column name invites the opposite "

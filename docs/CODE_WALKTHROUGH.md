@@ -1445,6 +1445,17 @@ interior) without.
 
 ## 11. The aperture pipeline — registry, extractors, wall builder
 
+**First, the word.** "Aperture" is used here as an umbrella for every
+modelled opening, and that is *not* how the excavation report uses it —
+the report means a **light opening**, a window ("the chamber was lit by
+means of apertures in the three walls"). The umbrella sense is baked
+into the path and script names and is not worth renaming, but the prose
+below prefers the precise terms: an **opening** is any registry row; a
+**perforating opening** (door, window) passes through the wall; a
+**recess** (niche, apse) is cut into a face and does not. `KINDS` in
+`aperture_registry.py` is where that distinction is declared, and
+`--openings {doors,perforating,all}` is where it becomes a build.
+
 **The data problem.** No single document records the chapels'
 openings. Three partial sources exist: the georeferenceable site plan
 (door *locations* for ~131 labeled chapels, drawn as gaps in wall
