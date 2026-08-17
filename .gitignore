@@ -1,7 +1,32 @@
 .DS_Store
 LAMP_DataStore
-*.qgz~
-*.tif
-!Task_2/*.tif
 __pycache__/
 *.pyc
+
+# --- public-copy guard rail ------------------------------------------
+# This repository is published without site data; its history was
+# filtered of every format below (see PUBLIC_COPY.md). They are ignored
+# here as well so that a stray `git add -A` cannot put them back --
+# running any pipeline, or even the synthetic self-test, writes files
+# of exactly these kinds into the tree.
+#
+# Files already tracked are unaffected by these rules. To add a
+# genuinely publishable figure -- a chart rather than a picture of the
+# site -- use `git add -f`.
+*.tif
+*.tfw
+*.aux.xml
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.geojson
+*.gpkg
+*.qgz
+*.qgz~
+*.obj
+*.ply
+*.las
+*.laz
+*.png

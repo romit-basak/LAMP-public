@@ -97,18 +97,32 @@ documented in [`CLAUDE.md`](CLAUDE.md), and
 clone-to-running-pipeline walkthrough. `scripts/sanity_checks.py` will
 report exactly which inputs are missing.
 
-**Two self-checks need no data at all** and are the quickest way to
+**The core self-checks need no site data** and are the quickest way to
 confirm the engine works:
 
 ```bash
 .venv/bin/python scripts/visible_fraction.py --self-test
-.venv/bin/python scripts/make_test_building.py          # synthetic assets
+.venv/bin/python scripts/make_test_building.py --crs EPSG:32636
 .venv/bin/python scripts/scene3d.py --assets viewshed_runs/synthetic_building/assets
 ```
 
-The last one casts rays through a synthetic cube-with-dome-and-door and
-asserts analytically known answers — through-door passes, above-head
-blocked, blank-wall blocked, exact first-hit distances, reciprocity.
+The second builds a synthetic cube-with-dome-and-door from scratch; the
+third casts rays through it and asserts analytically known answers —
+through-door passes, above-head blocked, blank-wall blocked, exact
+first-hit distances, reciprocity, and agreement between the two ray
+kernels over 720 rays. All pass in this copy.
+
+`--crs EPSG:32636` is needed only here. Normally the generator reads
+the CRS from `Task_2/DEM_Subset-Original.tif`, which is one of the
+removed rasters; passing the code explicitly replaces it. Nothing else
+about the synthetic scene depends on site data.
+
+**A note on running things here.** Every pipeline — including the
+synthetic self-test — writes rasters, geopackages and meshes into the
+tree. `.gitignore` therefore ignores all of those formats, so that
+running something and then `git add -A` cannot reintroduce the kinds of
+file this copy exists to exclude. Already-tracked files are unaffected;
+`git add -f` covers a genuinely publishable chart.
 
 ## Getting the data
 
