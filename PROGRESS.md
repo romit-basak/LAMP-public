@@ -3,9 +3,31 @@
 > Running record of major work on the viewshed half of LAMP. Newest entries at the top.
 > Keep entries brief: what was done, key findings/decisions, open questions raised.
 
+## 2026-08-20 — Lightning talk delivered; the intentionality result re-stated as non-randomness, not intent
+
+- **Talk given** at the HumanAI org meeting — 3 minutes, one slide, on
+  the aperture-aware engine and the door/window decomposition.
+- **Mentor review after the talk found the write-up over-reading the
+  result, and it was right.** V = 377 is a correlation; "the doors are
+  arranged with respect to each other" claims a cause. N1 permutes
+  observed directions *across* chapels, so it destroys every
+  relationship a door has to its local surroundings at once — any
+  systematic relation to local geometry would beat the null just as
+  mutual arrangement would, and the test cannot say which did.
+- **Wording corrected, numbers untouched.** `GSOC_WORK_PRODUCT.md`,
+  `CLAUDE.md`, `docs/CODE_WALKTHROUGH.md` and the 08-14 entry above now
+  claim non-randomness with respect to something local; a dated
+  limitation entry was added to the pre-registration docstring in
+  `test_intentionality.py`. The statistic, the nulls, the draws and the
+  p-values are unchanged — only what may be concluded from them.
+- **Isolating a mechanism** would need a null that holds the other
+  relations fixed. Deferred: it postdates the work period and overlaps
+  the path half of the proposal, which is another contributor's scope.
+  Mentors indicated paths are the next thing LAMP will look at.
+
 ## 2026-08-14 — The intentionality test runs and rejects on all three nulls; the engine got ~100x faster and two bugs were found on the way
 
-**Headline: the entrance arrangement is not accidental.** V = 377 inter-visible chapel-pairs observed, against null medians of 270 / 252 / 264. All three nulls give **p = 0.001** (the smallest attainable at 999 draws — *zero* null draws out of 999 reached the observed value), Holm-adjusted **0.003**, rejecting at the pre-registered alpha = 0.01, with effect sizes of **+3.6 / +3.8 / +3.3 IQR**. N1 holds every chapel where it stands and permutes only which wall carries the door, so the result is about *orientation*, and N2/N3 say the same for position and for both together. Written to `250_Apertures/intentionality/`.
+**Headline: the entrance arrangement is not random.** V = 377 inter-visible chapel-pairs observed, against null medians of 270 / 252 / 264. All three nulls give **p = 0.001** (the smallest attainable at 999 draws — *zero* null draws out of 999 reached the observed value), Holm-adjusted **0.003**, rejecting at the pre-registered alpha = 0.01, with effect sizes of **+3.6 / +3.8 / +3.3 IQR**. N1 holds every chapel where it stands and permutes only which wall carries the door, so the result is about *orientation*, and N2/N3 say the same for position and for both together. Written to `250_Apertures/intentionality/`. **Re-stated 2026-08-20** — these nulls establish non-randomness, not intent; see that entry.
 
 ### The engine: one draw went from 104 s to 0.65 s
 

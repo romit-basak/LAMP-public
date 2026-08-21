@@ -70,6 +70,18 @@ cannot be tuned to its own answer:
     non-uniform (zero chapels open north) — so a uniform null would
     reject for that reason and tell us nothing about arrangement. N2
     permutes chapel positions, N3 both.
+  - **Limitation, recorded 2026-08-20: the nulls establish
+    non-randomness, not intent.** N1 permutes observed directions
+    across chapels, which holds the compass distribution fixed but also
+    destroys, at one stroke, every relationship a door has to its local
+    surroundings. So *any* systematic relation between doors and local
+    geometry lifts V_obs above the null, and mutual arrangement is only
+    one such relation. Isolating one would need a null that holds the
+    others fixed; none is written. Until one is, a rejection here means
+    the arrangement is non-random with respect to something local, and
+    V is the measurement rather than the explanation. Nothing about the
+    statistic, the nulls or the p-values changes — only what may be
+    concluded from them.
 
 **Observers are chapel doorways, not the three survey marks.** The plan
 called for points sampled along the other contributor's path ensemble;

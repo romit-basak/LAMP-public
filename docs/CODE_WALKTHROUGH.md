@@ -1667,7 +1667,7 @@ deviation rather than edited in. That is the only thing separating this
 from tuning an analysis until it reports something. If you change what
 a draw means, record it there — and bump `DRAW_VERSION`.
 
-Four design points that generalise:
+Five design points that generalise:
 
 - **N1 reuses the observed directions rather than drawing walls
   uniformly.** A uniform draw would randomise the compass distribution
@@ -1686,6 +1686,16 @@ Four design points that generalise:
   covers configuration; it did not cover *semantics*, so a run resumed
   across a change in what a draw means would have spliced two
   experiments into one null distribution and looked fine doing it.
+- **A null says what it permutes, and nothing else.** N1 randomises
+  which chapel gets which direction, so a high V_obs means the observed
+  assignment is special — not *why* it is. Permuting directions across
+  chapels destroys every relationship a door has to its local
+  surroundings at once, so any systematic relation to local geometry
+  beats this null just as mutual arrangement would. Isolating one needs
+  a null that holds the others fixed, and none is written. Read a
+  rejection as "not random" and go looking for the mechanism
+  separately; the pre-registration docstring carries this as a dated
+  limitation.
 
 ### 12.3 Two bugs this tier caught, and why they are instructive
 

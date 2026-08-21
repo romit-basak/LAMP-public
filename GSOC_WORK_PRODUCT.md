@@ -155,7 +155,7 @@ high on the far wall, while a door spans floor level. Niches and apses
 change nothing on any metric, exactly — 179 recesses, zero
 perforations, the recess gate validating itself on real data.
 
-### The entrance arrangement is not accidental
+### The entrance arrangement is not random
 
 A **pre-registered** Monte Carlo test (α = 0.01, Holm-corrected, 999
 draws) counting ordered chapel pairs where one chapel's interior is
@@ -177,6 +177,16 @@ permutes only *which wall carries the door*, reusing the directions
 that actually occur — so it cannot reject merely because the compass
 distribution is lopsided.
 
+**What this does not establish.** The nulls test whether the
+arrangement is random, not *why* it is not. N1 permutes observed
+directions across chapels, which holds the compass distribution fixed
+but also destroys any relationship between a door and the open space
+beside it — so any systematic relation between doors and local geometry
+lifts V_obs above the null, and mutual arrangement is only one such
+relation. The claimable result is that the arrangement is **non-random
+with respect to something local**, and V = 377 is the measurement
+rather than the explanation.
+
 ### Entrance directions are neither solar nor arbitrary
 
 `test_entrance_azimuth.py`, n = 194, constrains the explanation space
@@ -191,8 +201,10 @@ before any ray is cast:
   from straight downhill, and 32.5% fall within 45° of downhill against
   30.2% expected (p = 0.261).
 
-Not the sun, not chance, not the terrain — and then the ray-cast test
-says the doors are arranged with respect to *each other*.
+Not the sun, not chance, not the terrain. That narrows the explanation
+space without closing it — what remains is circulation, mutual
+arrangement, or both, and the ray-cast test above measures the
+inter-visibility those would produce without yet separating them.
 
 ### The frescoes were never meant to be seen from outside
 
