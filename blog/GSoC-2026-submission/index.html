@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A Viewshed That Sees Through Doors — LAMP Viewshed Notes</title>
+<meta name="description" content="True 3D visibility analysis for a late-antique necropolis: an aperture-aware ray-casting engine, a door/window registry sourced from the excavation report, and a pre-registered test of the entrance arrangement.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../../index.html">LAMP Viewshed Notes</a>
+    <nav>
+      <a href="https://github.com/romit-basak/LAMP-public">Code</a>
+      <a href="https://github.com/romit-basak/LAMP-public/blob/main/GSOC_WORK_PRODUCT.md">Work product</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<article class="post">
+
+  <p class="kicker">GSoC 2026 · Late Antiquity Modelling Project (LAMP), HumanAI Foundation · mentors Dr. Camille Leon Angelo (University of Alabama) and Dr. Joshua Silver (KIT) · 21 August 2026</p>
+  <h1>A Viewshed That Sees Through Doors</h1>
+  <p class="subtitle">True 3D visibility analysis for a late-antique necropolis</p>
+
+  <figure>
+    <img src="assets/hero-bagawat.jpg" alt="General view of the mudbrick chapels at El Bagawat, photographed among the sandy hills of Kharga Oasis">
+    <figcaption>El Bagawat, Kharga Oasis, Egypt. Photo: Ktiv,
+      <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>,
+      via Wikimedia Commons.</figcaption>
+  </figure>
+
+  <h2>The site, and the question</h2>
+  <p>El Bagawat is a necropolis of roughly 263 mudbrick chapels cut into
+  the sandy hills of Egypt&rsquo;s Western Desert, built between the 3rd
+  and 7th centuries CE as Christianity took hold in the oasis. LAMP&rsquo;s
+  interest in the site is architectural and social: what did a person
+  standing anywhere in this landscape actually see, and how did that
+  shape which structures the community built, adapted and kept using?</p>
+  <p>Answering that requires a <em>viewshed</em> &mdash; a model of what
+  is visible from where. Existing tools can compute one. The trouble is
+  what they leave out.</p>
+
+  <h2>The problem with standard tools</h2>
+  <p>GIS viewshed analysis &mdash; GRASS <code>r.viewshed</code>, 2D
+  space-syntax visibility graphs &mdash; is planimetric. Every building
+  is a solid block with a height, nothing more. That&rsquo;s a
+  reasonable simplification for a lot of terrain analysis, but it
+  throws away exactly what makes a site like this legible: doorways and
+  windows that let sight and light pass <em>through</em> a structure and
+  <em>between</em> structures, not just around them.</p>
+  <p>A necropolis of individually built, individually oriented chapels,
+  on sloped and irregular ground, is close to a worst case for that
+  simplification. If where a chapel&rsquo;s door faces matters &mdash;
+  and the excavation report makes clear it does &mdash; a model that
+  can&rsquo;t represent a door can&rsquo;t test that.</p>
+
+  <h2>What I built</h2>
+  <p>A true 3D ray-casting engine. Buildings get real height from the
+  <strong>difference between two digital elevation models</strong>
+  &mdash; one with structures, one without &mdash; rather than from an
+  assumed constant or a separate imagery source. Rays are cast from an
+  observer&rsquo;s eye (default 1.5&nbsp;m, reflecting skeletal data for
+  late-antique Egyptian populations rather than the usual 1.75&nbsp;m
+  GIS default) through the resulting 3D scene, checking first-hit
+  geometry the same way a renderer would.</p>
+  <p>Before adding anything the site plan doesn&rsquo;t already have,
+  the engine had to earn trust on the plain case: it agrees with GRASS
+  <code>r.viewshed</code> at <strong>97&ndash;99%</strong> cell-by-cell
+  agreement on solid, unmodified buildings. That number isn&rsquo;t the
+  finding &mdash; it&rsquo;s the ticket to make the finding mean
+  something. Once solid-building agreement is that high, anything that
+  changes afterwards is coming from the openings, not from a bug in the
+  ray caster.</p>
+
+  <figure>
+    <img src="assets/scene-overview.png" alt="A rendered 3D view of several chapels at eye level, showing real building height and roofline variation derived from the DEM differential">
+    <figcaption>The 3D scene the engine casts rays through &mdash;
+    chapel geometry extruded from the DEM differential, rendered here in
+    Blender for illustration. The ray-casting itself runs on this same
+    geometry, not on the render.</figcaption>
+  </figure>
+
+  <h2>Finding the real doors</h2>
+  <p>The obvious source for door positions is the site&rsquo;s own
+  architectural plan &mdash; a clean 1:5000 line drawing with visible
+  gaps in the wall linework that look exactly like doorways. It&rsquo;s
+  a false lead. Those gaps are artifacts of registering the plan against
+  the building footprints, not real openings: chapel 180&rsquo;s
+  entrance, which the excavation report places firmly at the south-west
+  corner, shows up as <strong>unbroken wall</strong> on that very plan.
+  Building a door registry from the plan would have produced a
+  confident, wrong model across the entire site.</p>
+  <p>What worked instead was lower-tech: the excavation report&rsquo;s
+  own Chapter VII, which states each chapel&rsquo;s entrance in words
+  &mdash; &ldquo;it opens west.&rdquo; OCR&rsquo;ing two hundred report
+  pages and parsing that prose gave entrance directions for 194 of 263
+  chapels, hand-validated against a sample. Door widths and positions
+  for a handful of chapels came from CAD threshold marks in the
+  surviving architectural drawings. Between the two, the registry now
+  holds <strong>469 openings across 202 chapels</strong> &mdash; 197
+  doors, 93 windows, 172 niches, 7 apses.</p>
+  <p>No single source gives both an opening&rsquo;s position <em>and</em>
+  its dimensions, so the registry is explicit about what&rsquo;s
+  measured versus assumed, down to each row. Extraction scripts never
+  overwrite it directly; they propose candidates, and a person
+  confirms.</p>
+
+  <h2>Doors and windows do different jobs</h2>
+  <p>Adding openings to a validated, solid baseline and re-running the
+  site-wide comparison gives a clean decomposition:</p>
+
+  <table>
+    <thead>
+      <tr><th>variant</th><th>ground cells visible</th><th>interior-visible pairs</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>solid buildings only</td><td>36,520</td><td>8</td></tr>
+      <tr><td>+ doors</td><td>36,657 (+137)</td><td><strong>11</strong></td></tr>
+      <tr><td>+ windows</td><td>37,858 (+1,201)</td><td>11 (+0)</td></tr>
+      <tr><td>+ niches, apses</td><td>37,858 (+0)</td><td>11 (+0)</td></tr>
+    </tbody>
+  </table>
+
+  <figure>
+    <img src="../../Task_2/comparison_all_fabric/decomposition_apertures.png" alt="Decomposition of visible ground cells and interior-visible chapel pairs by opening type — solid buildings, then doors, windows, and recesses added in turn">
+  </figure>
+
+  <p>Doors add comparatively little ground area but are the
+  <em>only</em> opening that puts a building&rsquo;s interior in view.
+  Windows add roughly nine times more visible ground and precisely zero
+  new interiors. That&rsquo;s not a coincidence of this site &mdash;
+  it&rsquo;s forced by the geometry. A window sill sits above standing
+  eye height, so a sightline through it has to rise before it can pass,
+  and it lands high on the far wall rather than reaching the floor. A
+  door spans floor level, so a sightline through it can go straight
+  in.</p>
+
+  <figure class="schematic" role="img" aria-label="Two side-by-side diagrams: a sightline through a door reaching the interior floor of a far wall, and a sightline through a window, whose sill sits above eye height, rising to strike a far wall well above the floor">
+    <div class="schematic-row">
+      <div class="schematic-item">
+      <svg viewBox="0 0 300 260" xmlns="http://www.w3.org/2000/svg">
+        <line x1="10" y1="140" x2="290" y2="140" stroke="#e2e8f0" stroke-width="1" stroke-dasharray="2 4"/>
+        <line x1="10" y1="220" x2="290" y2="220" stroke="#94a3b8" stroke-width="2"/>
+        <rect x="110" y="64" width="16" height="156" fill="#334155"/>
+        <rect x="110" y="104" width="16" height="116" fill="#ffffff" stroke="#0f172a" stroke-width="1"/>
+        <rect x="230" y="64" width="16" height="156" fill="#334155"/>
+        <circle cx="40" cy="140" r="6" fill="#0f172a"/>
+        <line x1="40" y1="146" x2="40" y2="220" stroke="#0f172a" stroke-width="2"/>
+        <text x="40" y="118" font-size="13" fill="#0f172a" text-anchor="middle">observer</text>
+        <text x="40" y="160" font-size="11" fill="#64748b" text-anchor="middle">eye, 1.5 m</text>
+        <text x="118" y="52" font-size="12" fill="#0f172a" text-anchor="middle">door</text>
+        <line x1="40" y1="140" x2="238" y2="220" stroke="#f97316" stroke-width="2.5" stroke-dasharray="6 4"/>
+        <circle cx="238" cy="220" r="3" fill="#f97316"/>
+        <text x="150" y="244" font-size="12" fill="#b45309" text-anchor="middle">reaches the interior floor</text>
+      </svg>
+        <p class="schematic-title">Through a door</p>
+      </div>
+      <div class="schematic-item">
+      <svg viewBox="0 0 300 260" xmlns="http://www.w3.org/2000/svg">
+        <line x1="10" y1="140" x2="290" y2="140" stroke="#e2e8f0" stroke-width="1" stroke-dasharray="2 4"/>
+        <line x1="10" y1="220" x2="290" y2="220" stroke="#94a3b8" stroke-width="2"/>
+        <rect x="110" y="64" width="16" height="156" fill="#334155"/>
+        <rect x="110" y="90" width="16" height="35" fill="#ffffff" stroke="#0f172a" stroke-width="1"/>
+        <rect x="230" y="64" width="16" height="156" fill="#334155"/>
+        <circle cx="40" cy="140" r="6" fill="#0f172a"/>
+        <line x1="40" y1="146" x2="40" y2="220" stroke="#0f172a" stroke-width="2"/>
+        <text x="40" y="118" font-size="13" fill="#0f172a" text-anchor="middle">observer</text>
+        <text x="40" y="160" font-size="11" fill="#64748b" text-anchor="middle">eye, 1.5 m</text>
+        <text x="118" y="52" font-size="12" fill="#0f172a" text-anchor="middle">window</text>
+        <line x1="126" y1="125" x2="142" y2="125" stroke="#64748b" stroke-width="1"/>
+        <text x="146" y="129" font-size="10" fill="#64748b">sill</text>
+        <line x1="40" y1="140" x2="238" y2="84" stroke="#0891b2" stroke-width="2.5" stroke-dasharray="6 4"/>
+        <circle cx="238" cy="84" r="3" fill="#0891b2"/>
+        <text x="150" y="244" font-size="12" fill="#0e7490" text-anchor="middle">hits the far wall high</text>
+      </svg>
+        <p class="schematic-title">Through a window</p>
+      </div>
+    </div>
+    <figcaption>Why doors and windows do different jobs: a door spans
+    floor level, so a sightline through it can reach the interior. A
+    window sill sits above eye height, so the same geometry sends the
+    sightline up and into the far wall instead. Each panel is its own
+    building &mdash; the two do not share a wall.</figcaption>
+  </figure>
+
+  <p>Niches and apses &mdash; recesses cut into a wall face rather than
+  passing through it &mdash; change nothing on any metric, exactly.
+  That&rsquo;s not a null result; it&rsquo;s the model correctly
+  reporting that a feature which doesn&rsquo;t perforate the wall
+  can&rsquo;t affect what&rsquo;s visible through it.</p>
+
+  <h2>Is the arrangement intentional?</h2>
+  <p>The decomposition above says what a single doorway does. A
+  separate question is whether entrances across the <em>whole site</em>
+  are arranged with respect to each other &mdash; whether standing at
+  one chapel&rsquo;s door puts another chapel&rsquo;s interior in view
+  more often than chance would produce on this terrain, with this
+  density of buildings.</p>
+  <p>A pre-registered Monte Carlo test (&alpha; = 0.01, Holm-corrected,
+  999 draws) counts ordered chapel pairs where one chapel&rsquo;s
+  interior is visible from a standing position outside another&rsquo;s
+  doorway. Against three nulls &mdash; permuting which wall carries the
+  door, permuting chapel positions, and permuting both &mdash; the
+  observed count of <strong>377</strong> such pairs is rejected by all
+  three: zero of 999 random draws in any null reached it.</p>
+
+  <div class="callout">
+    <p><strong>What this does and doesn&rsquo;t establish.</strong> The
+    nulls test whether the arrangement is <em>random</em>, not
+    <em>why</em> it isn&rsquo;t. Permuting which wall carries a
+    chapel&rsquo;s door, for instance, holds the overall compass
+    distribution fixed but also erases any relationship a door has to
+    whatever sits near it locally &mdash; so any systematic relationship
+    between doors and local geometry would clear this bar, not only
+    mutual arrangement between chapels. The result that survives is that
+    the entrance arrangement is <strong>non-random with respect to
+    something local</strong>; 377 is the measurement, not yet the
+    explanation of what produced it.</p>
+  </div>
+
+  <p>A companion test narrows the field a different way: entrance
+  directions are not solar (they reject sunrise and sunset alignments in
+  the strongest possible way, by putting zero weight on south &mdash;
+  the single largest observed class), not uniform, and not explained by
+  ground slope (entrances sit a median 72&deg; off the downhill
+  direction). Not the sun, not chance, not the terrain. What&rsquo;s
+  left &mdash; circulation, mutual arrangement between buildings, or
+  both &mdash; is exactly what the inter-visibility test above measures,
+  without yet separating which.</p>
+
+  <h2>Limits of the data available</h2>
+  <p>No surviving source gives both an opening&rsquo;s position along
+  its wall and its dimensions at once. The excavation report states, in
+  words, which wall a chapel&rsquo;s entrance is on &mdash; enough to
+  build the registry above &mdash; but not a surveyed position along
+  that wall or a measured height; CAD threshold marks give both for a
+  handful of chapels, which is where the only 3 of 469 sourced
+  positions and 3 sourced dimensions come from. Everywhere else,
+  position and dimensions fall back to a spacing rule and a class
+  default, because nothing in the surviving record fixes them more
+  precisely. What&rsquo;s genuinely evidenced is <strong>which
+  wall</strong> an opening sits in &mdash; not exactly where along it.
+  Every number in this post holds at that resolution, and that ceiling
+  comes from the sources that survive for this site, not from a step
+  left undone.</p>
+  <p>There&rsquo;s also no measured visibility data to validate against
+  &mdash; the site is roughly 1,700 years old, and no one recorded who
+  could see whom from where. Validation instead means: agreement with
+  an independent, established tool on the case both should get right;
+  analytic self-tests on synthetic geometry with known answers; and
+  visual audit of outputs against the site plan by eye. That&rsquo;s a
+  different, and I&rsquo;d argue more honest, standard than fitting a
+  label set &mdash; but it&rsquo;s worth saying plainly rather than
+  letting a clean number imply more certainty than it has.</p>
+
+  <h2>Why this matters beyond one site</h2>
+  <p>None of this is specific to mudbrick chapels in a desert oasis.
+  Archaeology, urban history and architecture all lean on visibility to
+  explain why people moved, gathered, or built the way they did, and
+  every one of those fields has had to accept &ldquo;buildings are
+  solid blocks&rdquo; as a shortcut for lack of a better tool. A
+  physically real, aperture-aware 3D approach removes that shortcut.
+  The engine, the aperture pipeline and the statistical tests are all
+  published &mdash; see below &mdash; precisely so the method can be
+  pointed at somewhere else.</p>
+
+  <footer class="post-footer">
+    <p><strong>Code:</strong> <a href="https://github.com/romit-basak/LAMP-public">github.com/romit-basak/LAMP-public</a>
+    &mdash; see <a href="https://github.com/romit-basak/LAMP-public/blob/main/GSOC_WORK_PRODUCT.md"><code>GSOC_WORK_PRODUCT.md</code></a>
+    for the full checkpoint write-up, <a href="https://github.com/romit-basak/LAMP-public/blob/main/docs/CODE_WALKTHROUGH.md"><code>docs/CODE_WALKTHROUGH.md</code></a>
+    for a narrated tour of the scripts, and <a href="https://github.com/romit-basak/LAMP-public/blob/main/docs/DATA_PROVENANCE.md"><code>docs/DATA_PROVENANCE.md</code></a>
+    for a row-by-row audit of what&rsquo;s measured versus assumed. The
+    site dataset itself &mdash; excavation report scans, satellite
+    imagery, precise survey coordinates &mdash; isn&rsquo;t public and
+    isn&rsquo;t mine to release; see <a href="https://github.com/romit-basak/LAMP-public/blob/main/PUBLIC_COPY.md"><code>PUBLIC_COPY.md</code></a>
+    for what was kept out and why.</p>
+    <p><strong>Contact:</strong> Romit Basak &mdash;
+    <a href="mailto:basak.r@northeastern.edu">basak.r@northeastern.edu</a>
+    &middot; <a href="https://github.com/romit-basak">github.com/romit-basak</a></p>
+  </footer>
+
+</article>
+</main>
+</body>
+</html>

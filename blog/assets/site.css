@@ -1,0 +1,243 @@
+/* Shared styles for the LAMP viewshed blog. Plain CSS, no build step,
+   no external font or framework dependency — kept deliberately
+   self-contained so the site works from a static file server with
+   nothing else in place. */
+
+:root {
+  --ink: #0f172a;
+  --mute: #64748b;
+  --line: #cbd5e1;
+  --accent: #f97316;
+  --accent-dark: #b45309;
+  --accent-bg: #fff7ed;
+  --cyan: #0891b2;
+  --cyan-dark: #0e7490;
+  --paper: #ffffff;
+  --canvas: #f8fafc;
+  --max-w: 720px;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font: 17px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        Helvetica, Arial, sans-serif;
+}
+
+header.site-header {
+  background: var(--ink);
+  color: #fff;
+  padding: 28px 24px;
+}
+
+header.site-header .wrap {
+  max-width: var(--max-w);
+  margin: 0 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+header.site-header a.brand {
+  color: #fff;
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 1.15rem;
+}
+
+header.site-header a.brand:hover { text-decoration: underline; }
+
+header.site-header nav a {
+  color: #cbd5e1;
+  text-decoration: none;
+  font-size: 0.92rem;
+  margin-left: 18px;
+}
+
+header.site-header nav a:hover { color: #fff; }
+
+main {
+  max-width: var(--max-w);
+  margin: 0 auto;
+  padding: 36px 24px 64px;
+}
+
+/* ---- index / post-list page ------------------------------------- */
+
+.intro {
+  color: var(--mute);
+  margin-bottom: 32px;
+  font-size: 1.02rem;
+}
+
+.post-list { list-style: none; margin: 0; padding: 0; }
+
+.post-card {
+  padding: 22px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.post-card:first-child { padding-top: 0; }
+
+.post-card time {
+  display: block;
+  color: var(--mute);
+  font-size: 0.85rem;
+  margin-bottom: 4px;
+}
+
+.post-card h2 {
+  margin: 0 0 8px;
+  font-size: 1.4rem;
+}
+
+.post-card h2 a {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.post-card h2 a:hover { color: var(--accent-dark); }
+
+.post-card p { margin: 0; color: #334155; }
+
+/* ---- article page ------------------------------------------------ */
+
+article.post > .kicker {
+  color: var(--mute);
+  font-size: 0.92rem;
+  margin-bottom: 4px;
+}
+
+article.post h1 {
+  margin: 4px 0 2px;
+  font-size: 2.1rem;
+  line-height: 1.2;
+}
+
+article.post .subtitle {
+  color: var(--mute);
+  font-size: 1.15rem;
+  margin: 0 0 22px;
+}
+
+article.post figure {
+  margin: 28px 0;
+}
+
+article.post figure img,
+article.post figure svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--paper);
+}
+
+article.post figure.schematic svg { padding: 12px; }
+
+article.post .schematic-row {
+  display: flex;
+  gap: 16px;
+}
+
+article.post .schematic-item {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+article.post .schematic-item svg { margin: 0; }
+
+article.post .schematic-title {
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--mute);
+  margin: 8px 0 0;
+}
+
+@media (max-width: 560px) {
+  article.post .schematic-row { flex-direction: column; }
+}
+
+article.post figcaption {
+  font-size: 0.85rem;
+  color: var(--mute);
+  margin-top: 8px;
+}
+
+article.post h2 {
+  margin: 40px 0 12px;
+  font-size: 1.4rem;
+  border-top: 1px solid var(--line);
+  padding-top: 28px;
+}
+
+article.post h2:first-of-type { border-top: none; padding-top: 0; }
+
+article.post p { margin: 0 0 16px; }
+
+article.post a { color: var(--cyan-dark); }
+
+article.post table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 24px;
+  font-size: 0.95rem;
+}
+
+article.post th, article.post td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+article.post th { color: var(--mute); font-weight: 600; }
+
+article.post strong { color: var(--ink); }
+
+article.post code {
+  background: #eef2f7;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+.callout {
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 16px 20px;
+  margin: 20px 0;
+}
+
+.callout p:last-child { margin-bottom: 0; }
+
+footer.post-footer {
+  margin-top: 48px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+  color: var(--mute);
+  font-size: 0.9rem;
+}
+
+footer.post-footer a { color: var(--cyan-dark); }
+
+footer.site-footer {
+  max-width: var(--max-w);
+  margin: 0 auto;
+  padding: 0 24px 48px;
+  color: var(--mute);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 480px) {
+  main { padding: 24px 16px 48px; }
+  article.post h1 { font-size: 1.6rem; }
+}
