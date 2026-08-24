@@ -127,15 +127,38 @@ article.post .subtitle {
   margin: 0 0 22px;
 }
 
-.program-badges {
+.byline-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
+  justify-content: space-between;
+  gap: 16px;
   margin: 0 0 26px;
+  flex-wrap: wrap;
 }
 
-.program-badges img { height: 34px; width: auto; display: block; }
+.byline-author {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.byline-author .avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  border: 1px solid #000;
+}
+
+.byline-author span {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.byline-row .program-badge { height: 34px; width: auto; display: block; }
 
 article.post figure {
   margin: 28px 0;
