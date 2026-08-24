@@ -16,9 +16,7 @@ Foundation · mentors Dr. Camille Leon Angelo (University of Alabama)
 and Dr. Joshua Silver (KIT)*
 
 <div class="program-badges">
-<img src="assets/gsoc-icon.png" alt="Google Summer of Code">
-<span class="sep">&#64;</span>
-<img src="assets/humanai-logo.png" alt="HumanAI Foundation">
+<img src="assets/gsoc-humanai-badge.png" alt="Google Summer of Code x HumanAI Foundation">
 </div>
 
 ![General view of the mudbrick chapels at El Bagawat, photographed among the sandy hills of Kharga Oasis](a-viewshed-that-sees-through-doors/assets/hero-bagawat.jpg)

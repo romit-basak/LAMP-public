@@ -137,8 +137,6 @@ article.post .subtitle {
 
 .program-badges img { height: 34px; width: auto; display: block; }
 
-.program-badges .sep { color: var(--line); font-size: 1.2rem; }
-
 article.post figure {
   margin: 28px 0;
 }
