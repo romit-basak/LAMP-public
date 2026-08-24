@@ -15,7 +15,13 @@ summary: >
 Foundation · mentors Dr. Camille Leon Angelo (University of Alabama)
 and Dr. Joshua Silver (KIT)*
 
-![General view of the mudbrick chapels at El Bagawat, photographed among the sandy hills of Kharga Oasis](GSoC-2026-submission/assets/hero-bagawat.jpg)
+<div class="program-badges">
+<img src="assets/gsoc-icon.png" alt="Google Summer of Code">
+<span class="sep">&#64;</span>
+<img src="assets/humanai-logo.png" alt="HumanAI Foundation">
+</div>
+
+![General view of the mudbrick chapels at El Bagawat, photographed among the sandy hills of Kharga Oasis](a-viewshed-that-sees-through-doors/assets/hero-bagawat.jpg)
 *El Bagawat, Kharga Oasis, Egypt. Photo: Ktiv, [CC BY-SA
 4.0](https://creativecommons.org/licenses/by-sa/4.0/), via Wikimedia
 Commons.*
@@ -66,7 +72,7 @@ mean something. Once solid-building agreement is that high, anything
 that changes afterwards is coming from the openings, not from a bug in
 the ray caster.
 
-![A rendered 3D view of several chapels at eye level, showing real building height and roofline variation derived from the DEM differential](GSoC-2026-submission/assets/scene-overview.png)
+![A rendered 3D view of several chapels at eye level, showing real building height and roofline variation derived from the DEM differential](a-viewshed-that-sees-through-doors/assets/scene-overview.png)
 *The 3D scene the engine casts rays through — chapel geometry
 extruded from the DEM differential, rendered here in Blender for
 illustration. The ray-casting itself runs on this same geometry, not

@@ -127,6 +127,18 @@ article.post .subtitle {
   margin: 0 0 22px;
 }
 
+.program-badges {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin: 0 0 26px;
+}
+
+.program-badges img { height: 34px; width: auto; display: block; }
+
+.program-badges .sep { color: var(--line); font-size: 1.2rem; }
+
 article.post figure {
   margin: 28px 0;
 }
