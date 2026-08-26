@@ -1,6 +1,6 @@
 ---
 layout: post
-title: "A Viewshed That Sees Through Doors"
+title: "A Viewshed That Sees Through Building Apertures"
 subtitle: "True 3D visibility analysis for a late-antique necropolis"
 date: 2026-08-21
 author: "Romit Basak"
@@ -11,9 +11,11 @@ summary: >
   planimetric tool could have seen.
 ---
 
-*GSoC 2026 · Late Antiquity Modelling Project (LAMP), HumanAI
+*GSoC 2026 · Late Antiquity Modeling Project (LAMP), HumanAI
 Foundation · mentors Dr. Camille Leon Angelo (University of Alabama)
-and Dr. Joshua Silver (KIT)*
+and Dr. Joshua Silver (Karlsruhe Institute of Technology) · research
+facilitated by the REL Digital Lab, Department of Religious Studies,
+University of Alabama*
 
 <div class="byline-row">
 <div class="byline-author">
@@ -30,31 +32,32 @@ Commons.*
 
 ## The site, and the question
 
-El Bagawat is a necropolis of roughly 263 mudbrick chapels cut into the
-sandy hills of Egypt's Western Desert, built between the 3rd and 7th
-centuries CE as Christianity took hold in the oasis. LAMP's interest
-in the site is architectural and social: what did a person standing
-anywhere in this landscape actually see, and how did that shape which
-structures the community built, adapted and kept using?
+El Bagawat is a necropolis of roughly 263 mudbrick chapels
+constructed on the sandy hills of Egypt's Western Desert, built
+between the 3rd and 7th centuries CE. The Late Antiquity Modeling
+Project's (LAMP) interest in the site is both architectural and
+social: what did a person standing anywhere in this landscape
+actually see, and how did that shape Christian use of particular
+buildings?
 
-Answering that requires a *viewshed* — a model of what is visible from
-where. Existing tools can compute one. The trouble is what they leave
-out.
+Answering that requires a *viewshed* — a simulation of what someone
+can see from a given point. Existing tools can compute one. The
+trouble is what they leave out.
 
 ## The problem with standard tools
 
 GIS viewshed analysis — GRASS `r.viewshed`, 2D space-syntax visibility
 graphs — is planimetric. Every building is a solid block with a
 height, nothing more. That's a reasonable simplification for a lot of
-terrain analysis, but it throws away exactly what makes a site like
-this legible: doorways and windows that let sight and light pass
-*through* a structure and *between* structures, not just around them.
+terrain analysis, but it obscures important nuances: namely, how
+doorways and windows let sight and light pass *through* a structure
+and *between* structures, not just around them.
 
-A necropolis of individually built, individually oriented chapels, on
-sloped and irregular ground, is close to a worst case for that
-simplification. If where a chapel's door faces matters — and the
-excavation report makes clear it does — a model that can't represent a
-door can't test that.
+A necropolis of individually built, inconsistently oriented mausolea,
+on sloped and irregular ground, is close to a worst case for that
+simplification. The direction of a mausoleum's entrance matters. If a
+model can't represent an aperture, then it can't accurately represent
+the visual dimensions of a built environment.
 
 ## What I built
 
@@ -64,7 +67,10 @@ structures, one without — rather than from an assumed constant or a
 separate imagery source. Rays are cast from an observer's eye (default
 1.5 m, reflecting skeletal data for late-antique Egyptian populations
 rather than the usual 1.75 m GIS default) through the resulting 3D
-scene, checking first-hit geometry the same way a renderer would.
+scene, checking first-hit geometry the same way a renderer would. The
+same script can also be adjusted for how a visitor holds their head —
+looking straight ahead or tilted up — rather than assuming one fixed
+gaze.
 
 Before adding anything the site plan doesn't already have, the engine
 had to earn trust on the plain case: it agrees with GRASS `r.viewshed`
@@ -75,22 +81,24 @@ that changes afterwards is coming from the openings, not from a bug in
 the ray caster.
 
 ![A rendered 3D view of several chapels at eye level, showing real building height and roofline variation derived from the DEM differential](a-viewshed-that-sees-through-doors/assets/scene-overview.png)
-*The 3D scene the engine casts rays through — chapel geometry
+*The 3D scene the engine casts rays through — building geometry
 extruded from the DEM differential, rendered here in Blender for
 illustration. The ray-casting itself runs on this same geometry, not
-on the render.*
+on the render. Image: © The Late Antiquity Modeling Project 2026.*
 
 ## Finding the real doors
 
-The obvious source for door positions is the site's own architectural
-plan — a clean 1:5000 line drawing with visible gaps in the wall
-linework that look exactly like doorways. It's a false lead. Those
-gaps are artifacts of registering the plan against the building
-footprints, not real openings: chapel 180's entrance, which the
-excavation report places firmly at the south-west corner, shows up as
-**unbroken wall** on that very plan. Building a door registry from the
-plan would have produced a confident, wrong model across the entire
-site.
+The incomplete nature of archaeological data made this part of the
+project harder than it looks: locating real entrances was not a
+simple lookup. The obvious source for door positions is the site's own
+architectural plan — a clean 1:5000 line drawing — but both genuine
+entrances and incompletely preserved sections of wall are drawn the
+same way, as a gap in the linework, so the plan alone can't tell the
+two apart. Chapel 180 makes the risk concrete: the excavation report
+places its entrance firmly at the south-west corner, and that exact
+spot shows up as **unbroken wall** on the plan. Building a door
+registry from the plan alone would have produced a confident, wrong
+model across the entire site.
 
 What worked instead was lower-tech: the excavation report's own
 Chapter VII, which states each chapel's entrance in words — "it opens
@@ -207,6 +215,8 @@ doors and local geometry would clear this bar, not only mutual
 arrangement between chapels. The result that survives is that the
 entrance arrangement is **non-random with respect to something local**;
 377 is the measurement, not yet the explanation of what produced it.
+LAMP has a working hypothesis for what's driving this, and plans to
+test it in the next phase of the project.
 
 A companion test narrows the field a different way: entrance
 directions are not solar (they reject sunrise and sunset alignments in
@@ -268,3 +278,6 @@ for what was kept out and why.
 
 **Contact:** Romit Basak — [basak.r@northeastern.edu](mailto:basak.r@northeastern.edu)
 · [github.com/romit-basak](https://github.com/romit-basak)
+
+**Project Co-PIs:** Dr. Camille Leon Angelo ([cgangelo@ua.edu](mailto:cgangelo@ua.edu)),
+Dr. Joshua Silver ([joshua.silver@kit.edu](mailto:joshua.silver@kit.edu))

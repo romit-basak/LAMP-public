@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>A Viewshed That Sees Through Doors — LAMP Viewshed Notes</title>
+<title>A Viewshed That Sees Through Building Apertures — LAMP Viewshed Notes</title>
 <meta name="description" content="True 3D visibility analysis for a late-antique necropolis: an aperture-aware ray-casting engine, a door/window registry sourced from the excavation report, and a pre-registered test of the entrance arrangement.">
 <link rel="stylesheet" href="../assets/site.css">
 </head>
@@ -21,8 +21,8 @@
 <main>
 <article class="post">
 
-  <p class="kicker">GSoC 2026 · Late Antiquity Modelling Project (LAMP), HumanAI Foundation · mentors Dr. Camille Leon Angelo (University of Alabama) and Dr. Joshua Silver (KIT) · 21 August 2026</p>
-  <h1>A Viewshed That Sees Through Doors</h1>
+  <p class="kicker">GSoC 2026 · Late Antiquity Modeling Project (LAMP), HumanAI Foundation · mentors Dr. Camille Leon Angelo (University of Alabama) and Dr. Joshua Silver (Karlsruhe Institute of Technology) · research facilitated by the REL Digital Lab, Department of Religious Studies, University of Alabama · 21 August 2026</p>
+  <h1>A Viewshed That Sees Through Building Apertures</h1>
   <p class="subtitle">True 3D visibility analysis for a late-antique necropolis</p>
 
   <div class="byline-row">
@@ -41,29 +41,31 @@
   </figure>
 
   <h2>The site, and the question</h2>
-  <p>El Bagawat is a necropolis of roughly 263 mudbrick chapels cut into
-  the sandy hills of Egypt&rsquo;s Western Desert, built between the 3rd
-  and 7th centuries CE as Christianity took hold in the oasis. LAMP&rsquo;s
-  interest in the site is architectural and social: what did a person
-  standing anywhere in this landscape actually see, and how did that
-  shape which structures the community built, adapted and kept using?</p>
-  <p>Answering that requires a <em>viewshed</em> &mdash; a model of what
-  is visible from where. Existing tools can compute one. The trouble is
-  what they leave out.</p>
+  <p>El Bagawat is a necropolis of roughly 263 mudbrick chapels
+  constructed on the sandy hills of Egypt&rsquo;s Western Desert, built
+  between the 3rd and 7th centuries CE. The Late Antiquity Modeling
+  Project&rsquo;s (LAMP) interest in the site is both architectural and
+  social: what did a person standing anywhere in this landscape
+  actually see, and how did that shape Christian use of particular
+  buildings?</p>
+  <p>Answering that requires a <em>viewshed</em> &mdash; a simulation of
+  what someone can see from a given point. Existing tools can compute
+  one. The trouble is what they leave out.</p>
 
   <h2>The problem with standard tools</h2>
   <p>GIS viewshed analysis &mdash; GRASS <code>r.viewshed</code>, 2D
   space-syntax visibility graphs &mdash; is planimetric. Every building
   is a solid block with a height, nothing more. That&rsquo;s a
   reasonable simplification for a lot of terrain analysis, but it
-  throws away exactly what makes a site like this legible: doorways and
-  windows that let sight and light pass <em>through</em> a structure and
+  obscures important nuances: namely, how doorways and windows let
+  sight and light pass <em>through</em> a structure and
   <em>between</em> structures, not just around them.</p>
-  <p>A necropolis of individually built, individually oriented chapels,
-  on sloped and irregular ground, is close to a worst case for that
-  simplification. If where a chapel&rsquo;s door faces matters &mdash;
-  and the excavation report makes clear it does &mdash; a model that
-  can&rsquo;t represent a door can&rsquo;t test that.</p>
+  <p>A necropolis of individually built, inconsistently oriented
+  mausolea, on sloped and irregular ground, is close to a worst case
+  for that simplification. The direction of a mausoleum&rsquo;s
+  entrance matters. If a model can&rsquo;t represent an aperture, then
+  it can&rsquo;t accurately represent the visual dimensions of a built
+  environment.</p>
 
   <h2>What I built</h2>
   <p>A true 3D ray-casting engine. Buildings get real height from the
@@ -73,7 +75,9 @@
   observer&rsquo;s eye (default 1.5&nbsp;m, reflecting skeletal data for
   late-antique Egyptian populations rather than the usual 1.75&nbsp;m
   GIS default) through the resulting 3D scene, checking first-hit
-  geometry the same way a renderer would.</p>
+  geometry the same way a renderer would. The same script can also be
+  adjusted for how a visitor holds their head &mdash; looking straight
+  ahead or tilted up &mdash; rather than assuming one fixed gaze.</p>
   <p>Before adding anything the site plan doesn&rsquo;t already have,
   the engine had to earn trust on the plain case: it agrees with GRASS
   <code>r.viewshed</code> at <strong>97&ndash;99%</strong> cell-by-cell
@@ -86,21 +90,25 @@
   <figure>
     <img src="assets/scene-overview.png" alt="A rendered 3D view of several chapels at eye level, showing real building height and roofline variation derived from the DEM differential">
     <figcaption>The 3D scene the engine casts rays through &mdash;
-    chapel geometry extruded from the DEM differential, rendered here in
-    Blender for illustration. The ray-casting itself runs on this same
-    geometry, not on the render.</figcaption>
+    building geometry extruded from the DEM differential, rendered here
+    in Blender for illustration. The ray-casting itself runs on this
+    same geometry, not on the render. Image: &copy; The Late Antiquity
+    Modeling Project 2026.</figcaption>
   </figure>
 
   <h2>Finding the real doors</h2>
-  <p>The obvious source for door positions is the site&rsquo;s own
-  architectural plan &mdash; a clean 1:5000 line drawing with visible
-  gaps in the wall linework that look exactly like doorways. It&rsquo;s
-  a false lead. Those gaps are artifacts of registering the plan against
-  the building footprints, not real openings: chapel 180&rsquo;s
-  entrance, which the excavation report places firmly at the south-west
-  corner, shows up as <strong>unbroken wall</strong> on that very plan.
-  Building a door registry from the plan would have produced a
-  confident, wrong model across the entire site.</p>
+  <p>The incomplete nature of archaeological data made this part of
+  the project harder than it looks: locating real entrances was not a
+  simple lookup. The obvious source for door positions is the
+  site&rsquo;s own architectural plan &mdash; a clean 1:5000 line
+  drawing &mdash; but both genuine entrances and incompletely preserved
+  sections of wall are drawn the same way, as a gap in the linework, so
+  the plan alone can&rsquo;t tell the two apart. Chapel 180 makes the
+  risk concrete: the excavation report places its entrance firmly at
+  the south-west corner, and that exact spot shows up as
+  <strong>unbroken wall</strong> on the plan. Building a door registry
+  from the plan alone would have produced a confident, wrong model
+  across the entire site.</p>
   <p>What worked instead was lower-tech: the excavation report&rsquo;s
   own Chapter VII, which states each chapel&rsquo;s entrance in words
   &mdash; &ldquo;it opens west.&rdquo; OCR&rsquo;ing two hundred report
@@ -226,7 +234,9 @@
     mutual arrangement between chapels. The result that survives is that
     the entrance arrangement is <strong>non-random with respect to
     something local</strong>; 377 is the measurement, not yet the
-    explanation of what produced it.</p>
+    explanation of what produced it. LAMP has a working hypothesis for
+    what&rsquo;s driving this, and plans to test it in the next phase
+    of the project.</p>
   </div>
 
   <p>A companion test narrows the field a different way: entrance
@@ -288,6 +298,9 @@
     <p><strong>Contact:</strong> Romit Basak &mdash;
     <a href="mailto:basak.r@northeastern.edu">basak.r@northeastern.edu</a>
     &middot; <a href="https://github.com/romit-basak">github.com/romit-basak</a></p>
+    <p><strong>Project Co-PIs:</strong> Dr. Camille Leon Angelo
+    (<a href="mailto:cgangelo@ua.edu">cgangelo@ua.edu</a>), Dr. Joshua
+    Silver (<a href="mailto:joshua.silver@kit.edu">joshua.silver@kit.edu</a>)</p>
   </footer>
 
 </article>
