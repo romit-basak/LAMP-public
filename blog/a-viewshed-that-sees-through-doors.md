@@ -189,15 +189,16 @@ Carlo test (α = 0.01, Holm-corrected, 999 draws) counts ordered
 building pairs where one structure's interior is visible from a
 standing position outside another's doorway. Against three nulls —
 permuting which wall carries the door, permuting chapel positions, and
-permuting both — the observed count of **377** such pairs is rejected
+permuting both — the observed count of 377 such pairs is rejected
 by all three: zero of 999 random draws in any null reached it.
 
 **What does and doesn't this establish?** The nulls test whether the
 arrangement is *random*, not *why* it isn't. Our initial results
 suggest that the entrance arrangement is **non-random with respect to
 something local**; 377 is the measurement, not yet the explanation of
-what produced it. The Late Antiquity Project has a hypothesis for what
-is driving this, and will explore that hunch more in the next phases
+what produced it. The Late Antiquity Modeling Project (LAMP) has a
+hypothesis for what is driving this, and will explore that hunch more
+in the next phases
 of the project.
 
 ## Limits of the data available
@@ -207,7 +208,7 @@ opening's position along its wall and its dimensions. The excavation
 report sometimes states which wall has an entrance, but not a surveyed
 position. Everywhere else, position and dimensions fall back to a
 spacing rule and a class default. What's genuinely evidenced is
-**which wall** an opening sits in — not exactly where along it.
+which wall an opening sits in — not exactly where along it.
 
 There's also no measured visibility data to validate against because
 we are working with archaeological reconstructions. Validation instead
