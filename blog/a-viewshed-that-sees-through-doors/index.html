@@ -40,8 +40,14 @@
       via Wikimedia Commons.</figcaption>
   </figure>
 
-  <h2>The site, and the question</h2>
-  <p>El Bagawat is a necropolis of roughly 263 mudbrick chapels
+  <p>Standard GIS viewsheds treat every building as a solid, opaque
+  block. This project rectifies this limitation. The script I built
+  casts rays through a real 3D scene with modelled doors and windows,
+  creating new possibilities for exploring the relationship between the
+  landscape and the structures that populated it.</p>
+
+  <h2>The site and the question</h2>
+  <p>El Bagawat is a necropolis comprising roughly 263 mudbrick chapels
   constructed on the sandy hills of Egypt&rsquo;s Western Desert, built
   between the 3rd and 7th centuries CE. The Late Antiquity Modeling
   Project&rsquo;s (LAMP) interest in the site is both architectural and
@@ -69,23 +75,20 @@
 
   <h2>What I built</h2>
   <p>A true 3D ray-casting engine. Buildings get real height from the
-  <strong>difference between two digital elevation models</strong>
-  &mdash; one with structures, one without &mdash; rather than from an
-  assumed constant or a separate imagery source. Rays are cast from an
-  observer&rsquo;s eye (default 1.5&nbsp;m, reflecting skeletal data for
-  late-antique Egyptian populations rather than the usual 1.75&nbsp;m
-  GIS default) through the resulting 3D scene, checking first-hit
-  geometry the same way a renderer would. The same script can also be
-  adjusted for how a visitor holds their head &mdash; looking straight
-  ahead or tilted up &mdash; rather than assuming one fixed gaze.</p>
+  difference between two digital elevation models &mdash; one with
+  structures, one without &mdash; rather than from an assumed constant
+  or a separate imagery source. Rays are cast from an observer&rsquo;s
+  eye (default 1.5&nbsp;m, more accurately reflecting skeletal data for
+  ancient populations rather than the usual 1.75&nbsp;m GIS default)
+  through the resulting 3D scene, checking first-hit geometry the same
+  way a renderer would. This script can also be customized to account
+  for variances in the visitor&rsquo;s head position, such as whether
+  they are looking up or straight ahead.</p>
   <p>Before adding anything the site plan doesn&rsquo;t already have,
   the engine had to earn trust on the plain case: it agrees with GRASS
-  <code>r.viewshed</code> at <strong>97&ndash;99%</strong> cell-by-cell
-  agreement on solid, unmodified buildings. That number isn&rsquo;t the
-  finding &mdash; it&rsquo;s the ticket to make the finding mean
-  something. Once solid-building agreement is that high, anything that
-  changes afterwards is coming from the openings, not from a bug in the
-  ray caster.</p>
+  <code>r.viewshed</code> at 97&ndash;99% cell-by-cell agreement on
+  solid, unmodified buildings. Anything that changes afterwards is
+  coming from the openings, not from a bug in the ray caster.</p>
 
   <figure>
     <img src="assets/scene-overview.png" alt="A rendered 3D view of several chapels at eye level, showing real building height and roofline variation derived from the DEM differential">
@@ -97,46 +100,32 @@
   </figure>
 
   <h2>Finding the real doors</h2>
-  <p>The incomplete nature of archaeological data made this part of
-  the project harder than it looks: locating real entrances was not a
-  simple lookup. The obvious source for door positions is the
-  site&rsquo;s own architectural plan &mdash; a clean 1:5000 line
-  drawing &mdash; but both genuine entrances and incompletely preserved
-  sections of wall are drawn the same way, as a gap in the linework, so
-  the plan alone can&rsquo;t tell the two apart. Chapel 180 makes the
-  risk concrete: the excavation report places its entrance firmly at
-  the south-west corner, and that exact spot shows up as
-  <strong>unbroken wall</strong> on the plan. Building a door registry
-  from the plan alone would have produced a confident, wrong model
-  across the entire site.</p>
-  <p>What worked instead was lower-tech: the excavation report&rsquo;s
-  own Chapter VII, which states each chapel&rsquo;s entrance in words
-  &mdash; &ldquo;it opens west.&rdquo; OCR&rsquo;ing two hundred report
-  pages and parsing that prose gave entrance directions for 194 of 263
-  chapels, hand-validated against a sample. Door widths and positions
-  for a handful of chapels came from CAD threshold marks in the
-  surviving architectural drawings. Between the two, the registry now
-  holds <strong>469 openings across 202 chapels</strong> &mdash; 197
-  doors, 93 windows, 172 niches, 7 apses.</p>
-  <p>No single source gives both an opening&rsquo;s position <em>and</em>
-  its dimensions, so the registry is explicit about what&rsquo;s
-  measured versus assumed, down to each row. Extraction scripts never
-  overwrite it directly; they propose candidates, and a person
-  confirms.</p>
-
-  <h2>Doors and windows do different jobs</h2>
+  <p>The incomplete nature of archaeological data made this project all
+  the more challenging. For example, locating building entrances was
+  not an easy feat. The obvious source for door positions would
+  normally be the site&rsquo;s top plan. However, because both
+  entrances and incompletely preserved walls are visualized with
+  visible gaps in the linework, computational tools could not
+  differentiate between these two features.</p>
+  <p>What worked instead was lower-tech: we used information provided
+  in the excavation report, which noted the entrance direction. The
+  entrance directions for 194 of 263 chapels were hand-validated
+  against a sample. Door widths and positions for a handful of chapels
+  came from CAD threshold marks in the surviving architectural
+  drawings. Between the two, the registry now holds 469 openings across
+  202 buildings, including 197 doors and 93 windows.</p>
   <p>Adding openings to a validated, solid baseline and re-running the
   site-wide comparison gives a clean decomposition:</p>
 
   <table>
     <thead>
-      <tr><th>variant</th><th>ground cells visible</th><th>interior-visible pairs</th></tr>
+      <tr><th>Variant</th><th>Ground Cells Visible</th><th>Interior-Visible Pairs</th></tr>
     </thead>
     <tbody>
-      <tr><td>solid buildings only</td><td>36,520</td><td>8</td></tr>
-      <tr><td>+ doors</td><td>36,657 (+137)</td><td><strong>11</strong></td></tr>
-      <tr><td>+ windows</td><td>37,858 (+1,201)</td><td>11 (+0)</td></tr>
-      <tr><td>+ niches, apses</td><td>37,858 (+0)</td><td>11 (+0)</td></tr>
+      <tr><td>Solid buildings only</td><td>36,520</td><td>8</td></tr>
+      <tr><td>+ Doors</td><td>36,657 (+137)</td><td><strong>11</strong></td></tr>
+      <tr><td>+ Windows</td><td>37,858 (+1,201)</td><td>11 (+0)</td></tr>
+      <tr><td>+ Niches, apses</td><td>37,858 (+0)</td><td>11 (+0)</td></tr>
     </tbody>
   </table>
 
@@ -144,15 +133,15 @@
     <img src="../../Task_2/comparison_all_fabric/decomposition_apertures.png" alt="Decomposition of visible ground cells and interior-visible chapel pairs by opening type — solid buildings, then doors, windows, and recesses added in turn">
   </figure>
 
-  <p>Doors add comparatively little ground area but are the
-  <em>only</em> opening that puts a building&rsquo;s interior in view.
-  Windows add roughly nine times more visible ground and precisely zero
-  new interiors. That&rsquo;s not a coincidence of this site &mdash;
-  it&rsquo;s forced by the geometry. A window sill sits above standing
-  eye height, so a sightline through it has to rise before it can pass,
-  and it lands high on the far wall rather than reaching the floor. A
-  door spans floor level, so a sightline through it can go straight
-  in.</p>
+  <p>In the case of this site&rsquo;s architecture, doors add
+  comparatively little ground area, but are the only opening that puts
+  a building&rsquo;s interior in view. Windows add roughly nine times
+  more visible ground and precisely zero new interiors. That&rsquo;s
+  not a coincidence of this site &mdash; it&rsquo;s forced by the
+  geometry. A windowsill sits above standing eye height, so a sightline
+  through it has to rise before it can pass, and it lands high on the
+  far wall rather than reaching the floor. A door spans floor level, so
+  a sightline through it can go straight in.</p>
 
   <figure class="schematic" role="img" aria-label="Two side-by-side diagrams: a sightline through a door reaching the interior floor of a far wall, and a sightline through a window, whose sill sits above eye height, rising to strike a far wall well above the floor">
     <div class="schematic-row" aria-hidden="true">
@@ -202,12 +191,6 @@
     building &mdash; the two do not share a wall.</figcaption>
   </figure>
 
-  <p>Niches and apses &mdash; recesses cut into a wall face rather than
-  passing through it &mdash; change nothing on any metric, exactly.
-  That&rsquo;s not a null result; it&rsquo;s the model correctly
-  reporting that a feature which doesn&rsquo;t perforate the wall
-  can&rsquo;t affect what&rsquo;s visible through it.</p>
-
   <h2>Is the arrangement intentional?</h2>
   <p>The decomposition above says what a single doorway does. A
   separate question is whether entrances across the <em>whole site</em>
@@ -215,89 +198,52 @@
   one chapel&rsquo;s door puts another chapel&rsquo;s interior in view
   more often than chance would produce on this terrain, with this
   density of buildings.</p>
-  <p>A pre-registered Monte Carlo test (&alpha; = 0.01, Holm-corrected,
-  999 draws) counts ordered chapel pairs where one chapel&rsquo;s
-  interior is visible from a standing position outside another&rsquo;s
-  doorway. Against three nulls &mdash; permuting which wall carries the
-  door, permuting chapel positions, and permuting both &mdash; the
-  observed count of <strong>377</strong> such pairs is rejected by all
-  three: zero of 999 random draws in any null reached it.</p>
+  <p>Here is what our initial analysis suggests: a pre-registered Monte
+  Carlo test (&alpha; = 0.01, Holm-corrected, 999 draws) counts ordered
+  building pairs where one structure&rsquo;s interior is visible from a
+  standing position outside another&rsquo;s doorway. Against three
+  nulls &mdash; permuting which wall carries the door, permuting
+  chapel positions, and permuting both &mdash; the observed count of
+  <strong>377</strong> such pairs is rejected by all three: zero of 999
+  random draws in any null reached it.</p>
 
   <div class="callout">
-    <p><strong>What this does and doesn&rsquo;t establish.</strong> The
+    <p><strong>What does and doesn&rsquo;t this establish?</strong> The
     nulls test whether the arrangement is <em>random</em>, not
-    <em>why</em> it isn&rsquo;t. Permuting which wall carries a
-    chapel&rsquo;s door, for instance, holds the overall compass
-    distribution fixed but also erases any relationship a door has to
-    whatever sits near it locally &mdash; so any systematic relationship
-    between doors and local geometry would clear this bar, not only
-    mutual arrangement between chapels. The result that survives is that
-    the entrance arrangement is <strong>non-random with respect to
+    <em>why</em> it isn&rsquo;t. Our initial results suggest that the
+    entrance arrangement is <strong>non-random with respect to
     something local</strong>; 377 is the measurement, not yet the
-    explanation of what produced it. LAMP has a working hypothesis for
-    what&rsquo;s driving this, and plans to test it in the next phase
-    of the project.</p>
+    explanation of what produced it. The Late Antiquity Project has a
+    hypothesis for what is driving this, and will explore that hunch
+    more in the next phases of the project.</p>
   </div>
 
-  <p>A companion test narrows the field a different way: entrance
-  directions are not solar (they reject sunrise and sunset alignments in
-  the strongest possible way, by putting zero weight on south &mdash;
-  the single largest observed class), not uniform, and not explained by
-  ground slope (entrances sit a median 72&deg; off the downhill
-  direction). Not the sun, not chance, not the terrain. What&rsquo;s
-  left &mdash; circulation, mutual arrangement between buildings, or
-  both &mdash; is exactly what the inter-visibility test above measures,
-  without yet separating which.</p>
-
   <h2>Limits of the data available</h2>
-  <p>No surviving source gives both an opening&rsquo;s position along
-  its wall and its dimensions at once. The excavation report states, in
-  words, which wall a chapel&rsquo;s entrance is on &mdash; enough to
-  build the registry above &mdash; but not a surveyed position along
-  that wall or a measured height; CAD threshold marks give both for a
-  handful of chapels, which is where the only 3 of 469 sourced
-  positions and 3 sourced dimensions come from. Everywhere else,
-  position and dimensions fall back to a spacing rule and a class
-  default, because nothing in the surviving record fixes them more
-  precisely. What&rsquo;s genuinely evidenced is <strong>which
-  wall</strong> an opening sits in &mdash; not exactly where along it.
-  Every number in this post holds at that resolution, and that ceiling
-  comes from the sources that survive for this site, not from a step
-  left undone.</p>
+  <p>The documentation for the site does not consistently provide both
+  an opening&rsquo;s position along its wall and its dimensions. The
+  excavation report sometimes states which wall has an entrance, but
+  not a surveyed position. Everywhere else, position and dimensions
+  fall back to a spacing rule and a class default. What&rsquo;s
+  genuinely evidenced is <strong>which wall</strong> an opening sits
+  in &mdash; not exactly where along it.</p>
   <p>There&rsquo;s also no measured visibility data to validate against
-  &mdash; the site is roughly 1,700 years old, and no one recorded who
-  could see whom from where. Validation instead means: agreement with
-  an independent, established tool on the case both should get right;
-  analytic self-tests on synthetic geometry with known answers; and
-  visual audit of outputs against the site plan by eye. That&rsquo;s a
-  different, and I&rsquo;d argue more honest, standard than fitting a
-  label set &mdash; but it&rsquo;s worth saying plainly rather than
-  letting a clean number imply more certainty than it has.</p>
+  because we are working with archaeological reconstructions.
+  Validation instead requires corroborating and comparing with
+  established tools, and visual audit of outputs.</p>
 
   <h2>Why this matters beyond one site</h2>
-  <p>None of this is specific to mudbrick chapels in a desert oasis.
-  Archaeology, urban history and architecture all lean on visibility to
-  explain why people moved, gathered, or built the way they did, and
-  every one of those fields has had to accept &ldquo;buildings are
-  solid blocks&rdquo; as a shortcut for lack of a better tool. A
-  physically real, aperture-aware 3D approach removes that shortcut.
-  The engine, the aperture pipeline and the statistical tests are all
-  published &mdash; see below &mdash; precisely so the method can be
-  pointed at somewhere else.</p>
+  <p>Archaeology, urban history, and architecture all lean on
+  visibility to explain human behavior. For too long, these fields have
+  accepted &ldquo;buildings are solid blocks&rdquo; as a limitation of
+  the available tools. A physically real, aperture-aware 3D approach
+  removes that constraint.</p>
+  <p>The engine and pipeline are published so the method can be applied
+  elsewhere with appropriate credit.</p>
 
   <footer class="post-footer">
-    <p><strong>Code:</strong> <a href="https://github.com/romit-basak/LAMP-public">github.com/romit-basak/LAMP-public</a>
-    &mdash; see <a href="https://github.com/romit-basak/LAMP-public/blob/main/GSOC_WORK_PRODUCT.md"><code>GSOC_WORK_PRODUCT.md</code></a>
-    for the full checkpoint write-up, <a href="https://github.com/romit-basak/LAMP-public/blob/main/docs/CODE_WALKTHROUGH.md"><code>docs/CODE_WALKTHROUGH.md</code></a>
-    for a narrated tour of the scripts, and <a href="https://github.com/romit-basak/LAMP-public/blob/main/docs/DATA_PROVENANCE.md"><code>docs/DATA_PROVENANCE.md</code></a>
-    for a row-by-row audit of what&rsquo;s measured versus assumed. The
-    site dataset itself &mdash; excavation report scans, satellite
-    imagery, precise survey coordinates &mdash; isn&rsquo;t public and
-    isn&rsquo;t mine to release; see <a href="https://github.com/romit-basak/LAMP-public/blob/main/PUBLIC_COPY.md"><code>PUBLIC_COPY.md</code></a>
-    for what was kept out and why.</p>
+    <p><strong>Code:</strong> <a href="https://github.com/romit-basak/LAMP-public">github.com/romit-basak/LAMP-public</a></p>
     <p><strong>Contact:</strong> Romit Basak &mdash;
-    <a href="mailto:basak.r@northeastern.edu">basak.r@northeastern.edu</a>
-    &middot; <a href="https://github.com/romit-basak">github.com/romit-basak</a></p>
+    <a href="mailto:basak.r@northeastern.edu">basak.r@northeastern.edu</a></p>
     <p><strong>Project Co-PIs:</strong> Dr. Camille Leon Angelo
     (<a href="mailto:cgangelo@ua.edu">cgangelo@ua.edu</a>), Dr. Joshua
     Silver (<a href="mailto:joshua.silver@kit.edu">joshua.silver@kit.edu</a>)</p>
